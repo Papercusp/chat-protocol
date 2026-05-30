@@ -1,5 +1,5 @@
 /**
- * @restart/chat-protocol — the deps-free wire contract for streaming agent chats.
+ * @papercusp/chat-protocol — the deps-free wire contract for streaming agent chats.
  *
  * One typed SSE event union + the interactive-card protocol, shared across
  * Restart (Scout) and papercusp. Domain-agnostic on purpose: products,
@@ -23,6 +23,10 @@ export interface CardOption {
   id: string;
   label: string;
   description?: string;
+  /** Optional secondary hint text (papercusp wire field; optional for back-compat). */
+  hint?: string;
+  /** Optional visual emphasis (papercusp wire field; optional for back-compat). */
+  style?: 'default' | 'primary' | 'danger';
 }
 
 export interface CardPresentation {
@@ -35,6 +39,11 @@ export interface CardPresentation {
   min?: number;
   max?: number;
   step?: number;
+  /**
+   * radio only: the option set can be answered by voice (papercusp wire field;
+   * optional for back-compat). Voice surfaces read the options for spoken answering.
+   */
+  voiceAnswerable?: boolean;
 }
 
 /** What the model asks for via `ask_choice` / `present_card`. */
@@ -54,6 +63,12 @@ export interface OpenCardSnapshot extends CardSpec {
   correlationId: string;
   /** epoch ms */
   createdAt: number;
+  /**
+   * The response schema serialized as JSON Schema (papercusp wire field; optional
+   * for back-compat). papercusp validates submissions against the source zod
+   * schema server-side and ships the JSON-Schema form for renderers.
+   */
+  dataSchemaJson?: Record<string, unknown>;
 }
 
 /**

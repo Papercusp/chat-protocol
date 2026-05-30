@@ -1,5 +1,5 @@
 {
-  "name": "@restart/chat-protocol",
+  "name": "@papercusp/chat-protocol",
   "version": "0.1.0",
   "description": "Deps-free streaming-chat wire contract — SSE event union + interactive-card protocol. Shared across Restart (Scout) and papercusp.",
   "license": "UNLICENSED",
