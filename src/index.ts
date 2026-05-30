@@ -35,9 +35,15 @@ export interface CardPresentation {
   options?: CardOption[];
   /** text input placeholder. */
   placeholder?: string;
-  /** slider bounds. */
-  min?: number;
-  max?: number;
+  /** text only: render a multi-line input (papercusp wire field; optional). */
+  multiline?: boolean;
+  /**
+   * Bounds. `number` for slider; ISO date `string` for the `date` kind
+   * (papercusp uses string date bounds — widened for back-compat; consumers
+   * that only do slider math read these as numbers).
+   */
+  min?: number | string;
+  max?: number | string;
   step?: number;
   /**
    * radio only: the option set can be answered by voice (papercusp wire field;
