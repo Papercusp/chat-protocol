@@ -55,7 +55,12 @@ export interface CardPresentation {
 /** What the model asks for via `ask_choice` / `present_card`. */
 export interface CardSpec {
   prompt: string;
-  presentation: CardPresentation;
+  /**
+   * Visual presentation hint. Optional: a plain prompt (voice / text-only /
+   * confirm) may omit it. (papercusp emits presentation-less cards; widened to
+   * optional for back-compat — builders that always set it are unaffected.)
+   */
+  presentation?: CardPresentation;
   /** Plain-text rendering for voice / no-UI clients. */
   fallbackText?: string;
   /** Allow the user to dismiss without answering. */
