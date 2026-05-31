@@ -113,7 +113,12 @@ export type ChatEvent =
   | { type: 'card_closed'; correlationId: string }
   | { type: 'state'; version: number; snapshot: unknown }
   | { type: 'done'; usage?: { totalTokens?: number; costUsd?: number } }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  // Generic page navigation — the assistant asks the client to go to a target
+  // (a URL/route; the href is just data, so it's domain-agnostic). Transient
+  // action, NOT replayed on reconnect (it would re-navigate). Domain-specific
+  // page actions (cart, filters, highlight) stay on the consumer's own event union.
+  | { type: 'navigate'; href: string };
 
 export type ChatEventType = ChatEvent['type'];
 
