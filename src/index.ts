@@ -67,6 +67,120 @@ export interface CardSpec {
   allowDecline?: boolean;
   /** Auto-cancel after this many ms (server resolves as `cancel`). */
   timeoutMs?: number;
+  /**
+   * Optional structured body block rendered between the prompt and the
+   * options — the card-system rendering of a `<report>` payload. A card
+   * that only *shows* a report (no question) is valid: prompt carries the
+   * one-liner, presentation is omitted. See `ReportBlock`.
+   */
+  report?: ReportBlock;
+}
+
+// ---------------------------------------------------------------------------
+// Structured report blocks — the one schema for structured status content.
+//
+// A `ReportBlock` is the card system's structured-body payload: a two-tier
+// plan→item status list. It is THE wire shape for the operator's `<report>`
+// tag (papercusp), for attention/inbox items that carry structured detail,
+// and for any `CardSpec.report` body. One schema, many renderers (desktop
+// card, TUI two-tier list) — no parallel structured channels.
+// (Lifted from papercusp's operator-converse ParsedReport — see plan
+// report-cards-inbox-reconciliation-2026-06-05 D-001.)
+// ---------------------------------------------------------------------------
+
+/**
+ * One item inside a report plan block. `status` is an optional free string
+ * (rendered through a glyph map with a neutral fallback) — known tokens are
+ * todo|wip|blocked|done|dropped|passed|failing|needs-human, but an unknown
+ * status degrades gracefully rather than dropping the row.
+ */
+export interface ReportItem {
+  /** Item id (e.g. `P-003`, `F-12`), optional. */
+  id?: string;
+  /** The item's one-line text. Required — an item with no text is dropped. */
+  text: string;
+  /** Free-string status; mapped to a glyph by the renderer. */
+  status?: string;
+}
+
+/** One plan (the outer tier) inside a report block. */
+export interface ReportPlan {
+  /** Plan slug, optional (links the block to a plan). */
+  slug?: string;
+  /** Plan title / label. Falls back to `slug` when omitted; a block with neither is dropped. */
+  title: string;
+  /** Free-string status (draft|ready|active|shipped|blocked|…); glyph-mapped. */
+  status?: string;
+  /** Optional one-line summary shown under the title. */
+  summary?: string;
+  /** The plan's items (the inner tier). Omitted/empty when the block is just a header. */
+  items?: ReportItem[];
+}
+
+/** A structured two-tier plan→item status block. */
+export interface ReportBlock {
+  /** Optional overall heading for the block. */
+  title?: string;
+  /** The plan blocks (≥1 — a block with no valid plan is dropped to null). */
+  plans: ReportPlan[];
+}
+
+/** Trim + drop empties: a non-blank string, or undefined. */
+function reportStr(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim();
+  return t.length > 0 ? t : undefined;
+}
+
+/**
+ * Validate an already-JSON-parsed value into a `ReportBlock`, or null when
+ * it's malformed / empty. Defensive — never throws; a bad payload is dropped
+ * (callers warn) rather than crashing the turn/render.
+ *
+ * Shape: `{ title?, plans: [{ slug?, title, status?, summary?, items?: [{ id?, text, status? }] }] }`.
+ * A plan block needs at least a `title` (or `slug` as fallback); an item
+ * needs at least `text` (or `id` as fallback). Blocks/items missing both
+ * are skipped. Returns null when no valid plan survives.
+ */
+export function parseReportBlock(value: unknown): ReportBlock | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const rawPlans = (value as { plans?: unknown }).plans;
+  if (!Array.isArray(rawPlans)) return null;
+
+  const plans: ReportPlan[] = [];
+  for (const p of rawPlans) {
+    if (!p || typeof p !== 'object') continue;
+    const rec = p as Record<string, unknown>;
+    const slug = reportStr(rec.slug);
+    const title = reportStr(rec.title) ?? slug;
+    if (!title) continue; // a plan block needs a label
+
+    const items: ReportItem[] = [];
+    if (Array.isArray(rec.items)) {
+      for (const it of rec.items) {
+        if (!it || typeof it !== 'object') continue;
+        const irec = it as Record<string, unknown>;
+        const id = reportStr(irec.id);
+        const text = reportStr(irec.text) ?? id;
+        if (!text) continue; // an item needs text
+        items.push({ id, text, status: reportStr(irec.status) });
+      }
+    }
+
+    plans.push({
+      slug,
+      title,
+      status: reportStr(rec.status),
+      summary: reportStr(rec.summary),
+      items: items.length > 0 ? items : undefined,
+    });
+  }
+
+  if (plans.length === 0) return null;
+  const out: ReportBlock = { plans };
+  const topTitle = reportStr((value as Record<string, unknown>).title);
+  if (topTitle) out.title = topTitle;
+  return out;
 }
 
 /** The card as it appears on the wire (state channel) — a CardSpec plus identity. */
