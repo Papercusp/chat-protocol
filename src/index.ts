@@ -214,10 +214,16 @@ export type CardResponse =
  * Generic, domain-agnostic chat events. Consumers union their own domain events
  * onto this (e.g. `type ScoutEvent = ChatEvent | { type: 'products'; … }`).
  *
- * Two channels by convention:
+ * Three channels by convention (a complete partition of `ChatEvent['type']`):
  *  - EVENT channel (append-only, replayable): session, token, tool_start, done, error
  *  - STATE channel (last-write-wins, NOT replayed as history): card, card_closed, state
  *    — so a reconnect after answering a card never re-prompts.
+ *  - TRANSIENT channel (fire-once actions, NOT replayed at all): navigate
+ *    — replaying these on reconnect would re-fire the action (re-navigate).
+ *
+ * Only the EVENT channel is replayable — use {@link isReplayableEvent}. Gating
+ * replay on `!isStateChannelEvent(type)` is WRONG: it would replay transient
+ * events like `navigate`.
  */
 export type ChatEvent =
   | { type: 'session'; sessionId: string }
@@ -240,8 +246,26 @@ export type ChatEventType = ChatEvent['type'];
 export const EVENT_CHANNEL_TYPES = ['session', 'token', 'tool_start', 'done', 'error'] as const;
 /** State-channel types (last-write-wins; do NOT replay as history). */
 export const STATE_CHANNEL_TYPES = ['card', 'card_closed', 'state'] as const;
+/**
+ * Transient-channel types — fire-once actions that are NOT replayed at all
+ * (replaying would re-fire the action, e.g. re-navigate the client). Distinct
+ * from STATE: there is no last value to re-send on reconnect, the event is just
+ * dropped from history.
+ */
+export const TRANSIENT_CHANNEL_TYPES = ['navigate'] as const;
 
 /** True for events that belong on the last-write-wins state channel. */
 export function isStateChannelEvent(type: ChatEventType): boolean {
   return (STATE_CHANNEL_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * True for events that are safe to replay as history on reconnect — i.e. ONLY
+ * the append-only EVENT channel. State events are re-sent as a snapshot (not
+ * replayed), and transient events (`navigate`) are never re-sent. This is the
+ * correct replay gate; do NOT use `!isStateChannelEvent(type)`, which would
+ * wrongly replay transient actions.
+ */
+export function isReplayableEvent(type: ChatEventType): boolean {
+  return (EVENT_CHANNEL_TYPES as readonly string[]).includes(type);
 }

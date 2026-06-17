@@ -81,6 +81,39 @@ describe('parseReportBlock', () => {
     expect(parseReportBlock({ plans: [{ status: 'no-label' }] })).toBeNull();
   });
 
+  it('drops items whose numeric id/text cannot coerce to a string, keeps the plan', () => {
+    // reportStr returns undefined for non-strings, so a numeric id+text item has
+    // no usable text and is dropped — but the plan itself survives (its title is
+    // a real string).
+    const block = parseReportBlock({ plans: [{ title: 'p', items: [{ id: 5, text: 7 }] }] });
+    expect(block).not.toBeNull();
+    expect(block?.plans).toHaveLength(1);
+    expect(block?.plans[0]?.title).toBe('p');
+    expect(block?.plans[0]?.items).toBeUndefined(); // item dropped, none survive
+  });
+
+  it('keeps a numeric-text item only when a string id supplies the text fallback', () => {
+    const block = parseReportBlock({ plans: [{ title: 'p', items: [{ id: 'P-1', text: 7 }] }] });
+    expect(block?.plans[0]?.items).toEqual([{ id: 'P-1', text: 'P-1', status: undefined }]);
+  });
+
+  it('ignores a numeric plan status (coerces to undefined), keeps the plan', () => {
+    const block = parseReportBlock({ plans: [{ title: 'p', status: 200 }] });
+    expect(block?.plans).toHaveLength(1);
+    expect(block?.plans[0]?.status).toBeUndefined();
+  });
+
+  it('ignores a numeric item status (coerces to undefined)', () => {
+    const block = parseReportBlock({ plans: [{ title: 'p', items: [{ text: 'real', status: 1 }] }] });
+    expect(block?.plans[0]?.items).toEqual([{ id: undefined, text: 'real', status: undefined }]);
+  });
+
+  it('ignores a numeric top-level / plan title that cannot coerce', () => {
+    // numeric top title → undefined; numeric plan title alone → plan dropped.
+    expect(parseReportBlock({ title: 42, plans: [{ slug: 's', title: 99 }] })?.title).toBeUndefined();
+    expect(parseReportBlock({ plans: [{ title: 99 }] })).toBeNull();
+  });
+
   it('never throws on hostile shapes', () => {
     expect(() => parseReportBlock({ plans: [null, 1, 'x', { title: 'ok', items: [null, 7] }] })).not.toThrow();
     const block = parseReportBlock({ plans: [null, 1, 'x', { title: 'ok', items: [null, 7] }] });
