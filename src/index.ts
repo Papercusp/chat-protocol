@@ -183,6 +183,138 @@ export function parseReportBlock(value: unknown): ReportBlock | null {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// `<ask>` blocks — a durable, owner-directed question any text-producing
+// agent can emit inline in its turn output (D-001,
+// owner-inbox-single-pane-2026-07-17). Distinct from `CardSpec` /
+// `OpenCardSnapshot` (the live, correlated interactive-card channel): `<ask>`
+// is a PLAIN-TEXT-EMBEDDABLE fallback that survives even on a client with no
+// card system wired up (a Claude Stop-hook, an OMP turn_end capture, a
+// transcript watcher). A client that DOES have a card system renders an
+// `<ask>` block as an equivalent card; one that doesn't still gets a
+// structured, greppable, machine-mirrorable question instead of unstructured
+// prose that only a human reading the terminal would ever see.
+//
+// Wire shape: `<ask>{"question":"…","options":[{"id":"…","label":"…"}],
+// "refs":["WI-1234"]}</ask>`, embedded inline in a turn's raw text — the same
+// tag-in-turn-text convention as `<report>` (see operator-converse-tags.ts
+// REPORT_RE). Unlike `<report>` (whose raw-text tag extraction is
+// operator-turn-specific and lives in operator-converse-tags.ts, paired with
+// `<say>`/`<spawn>`/etc.), `<ask>` needs the SAME raw-text extraction across
+// multiple, unrelated client integrations (Claude hooks, OMP's coord-hook.ts,
+// a Codex-side convention) — so the tag-level parser + serializer live here,
+// in the shared deps-free package, rather than being re-implemented per
+// client.
+// ---------------------------------------------------------------------------
+
+/** One offered choice for an `<ask>` block. */
+export interface AskOption {
+  /** Stable id returned in the reply (e.g. "yes", "opt_a"). Required. */
+  id: string;
+  label: string;
+  description?: string;
+}
+
+/**
+ * The `<ask>` block payload: a durable, structured question an agent poses
+ * to the owner. `options` is omitted for a free-text question. `refs` names
+ * ids/paths/urls the question is about (e.g. `WI-1234`, a file path) —
+ * carried through as context for the mirrored escalation, not rendered as
+ * part of the question text itself.
+ */
+export interface AskBlock {
+  /** The question text. Required — a block with no question is dropped. */
+  question: string;
+  /** Optional choices the asker offers; omitted for a free-text question. */
+  options?: AskOption[];
+  /** Optional reference ids/paths/urls the question is about. */
+  refs?: string[];
+}
+
+/**
+ * Validate an already-JSON-parsed value into an `AskBlock`, or null when
+ * it's malformed / empty. Defensive — never throws; a bad payload is
+ * dropped (callers warn) rather than crashing the turn/render. Mirrors
+ * `parseReportBlock`'s contract exactly.
+ *
+ * Shape: `{ question, options?: [{ id, label?, description? }], refs?: string[] }`.
+ * An option needs at least `id` (falls back to `id` for a missing `label`);
+ * options missing `id` are skipped. `refs` entries that aren't non-blank
+ * strings are dropped.
+ */
+export function parseAskBlock(value: unknown): AskBlock | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const rec = value as Record<string, unknown>;
+  const question = reportStr(rec.question);
+  if (!question) return null; // a block needs a question
+
+  let options: AskOption[] | undefined;
+  if (Array.isArray(rec.options)) {
+    const parsed: AskOption[] = [];
+    for (const o of rec.options) {
+      if (!o || typeof o !== 'object') continue;
+      const orec = o as Record<string, unknown>;
+      const id = reportStr(orec.id);
+      if (!id) continue; // an option needs a stable id
+      const label = reportStr(orec.label) ?? id;
+      parsed.push({ id, label, description: reportStr(orec.description) });
+    }
+    options = parsed.length > 0 ? parsed : undefined;
+  }
+
+  let refs: string[] | undefined;
+  if (Array.isArray(rec.refs)) {
+    const parsed = rec.refs.map((r) => reportStr(r)).filter((r): r is string => r !== undefined);
+    refs = parsed.length > 0 ? parsed : undefined;
+  }
+
+  const out: AskBlock = { question };
+  if (options) out.options = options;
+  if (refs) out.refs = refs;
+  return out;
+}
+
+/**
+ * Parse a raw `<ask>` JSON body (the string between the tags) into an
+ * `AskBlock`, or null when the JSON itself is malformed. Thin JSON.parse
+ * wrapper around `parseAskBlock`, mirroring `parseReportBody`.
+ */
+export function parseAskBody(jsonBody: string): AskBlock | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(jsonBody);
+  } catch {
+    return null;
+  }
+  return parseAskBlock(data);
+}
+
+const ASK_TAG_RE = /<ask>([\s\S]*?)<\/ask>/i;
+
+/**
+ * Extract + validate the `<ask>{json}</ask>` tag out of a raw turn-output
+ * string, or null when no tag is present or its JSON body is malformed /
+ * empty. Defensive — never throws. This is the tolerant parser callers
+ * (hooks, watchers, hand-rolled hive integrations) reach for directly on
+ * unstructured model output, without re-implementing the tag regex.
+ */
+export function parseAskTag(rawTurnText: string): AskBlock | null {
+  const match = ASK_TAG_RE.exec(rawTurnText);
+  if (!match) return null;
+  return parseAskBody(match[1].trim());
+}
+
+/**
+ * Serialize an `AskBlock` back into the `<ask>{json}</ask>` wire tag — the
+ * inverse of `parseAskTag`. Used by callers that construct a tag
+ * programmatically (e.g. a hook mirroring a client-native structured
+ * question, like Claude's `AskUserQuestion`, into the `<ask>` convention)
+ * rather than emitting raw text by hand.
+ */
+export function serializeAskTag(block: AskBlock): string {
+  return `<ask>${JSON.stringify(block)}</ask>`;
+}
+
 /** The card as it appears on the wire (state channel) — a CardSpec plus identity. */
 export interface OpenCardSnapshot extends CardSpec {
   correlationId: string;

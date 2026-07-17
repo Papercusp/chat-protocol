@@ -1,8 +1,14 @@
 # @papercusp/chat-protocol
 
 The **deps-free wire contract** for streaming agent chats: the SSE event
-union (delta / tool / done / error …) plus the interactive-card protocol
-(text / radio / confirm cards and their responses).
+union (delta / tool / done / error …), the interactive-card protocol
+(text / radio / confirm cards and their responses), and the tagged
+structured-content blocks embeddable inline in turn text — `ReportBlock`
+(`<report>{json}</report>`, a two-tier plan→item status list) and `AskBlock`
+(`<ask>{json}</ask>`, a durable owner-directed question with optional
+choices/refs). Each block ships a schema, a tolerant defensive parser (never
+throws — malformed input drops to `null`), and, for `AskBlock`, a
+raw-tag serializer for callers that construct the tag programmatically.
 
 Zero runtime dependencies, zero React, zero domain types — just TypeScript
 types + a few zod schemas describing the bytes on the wire. The backend, the
