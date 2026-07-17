@@ -101,6 +101,16 @@ export interface ReportItem {
   text: string;
   /** Free-string status; mapped to a glyph by the renderer. */
   status?: string;
+  /**
+   * Optional actionable drill-in pointer for the row — an opaque, renderer-
+   * routed reference (e.g. `escalation:<id>`, `wi:<harness>#<id>`,
+   * `plan:<slug>`). A card renderer MAY turn it into a link/action that opens
+   * or resolves the referenced thing; a text renderer folds it in as a plain
+   * suffix. Domain-neutral: the shape/meaning of the ref is the host's, not
+   * this package's. (deterministic-status-cards-2026-07-17 P-001 — turns the
+   * curator's dead `drill in: <ref>` monospace into a real action.)
+   */
+  ref?: string;
 }
 
 /** One plan (the outer tier) inside a report block. */
@@ -137,7 +147,7 @@ function reportStr(v: unknown): string | undefined {
  * it's malformed / empty. Defensive — never throws; a bad payload is dropped
  * (callers warn) rather than crashing the turn/render.
  *
- * Shape: `{ title?, plans: [{ slug?, title, status?, summary?, items?: [{ id?, text, status? }] }] }`.
+ * Shape: `{ title?, plans: [{ slug?, title, status?, summary?, items?: [{ id?, text, status?, ref? }] }] }`.
  * A plan block needs at least a `title` (or `slug` as fallback); an item
  * needs at least `text` (or `id` as fallback). Blocks/items missing both
  * are skipped. Returns null when no valid plan survives.
@@ -163,7 +173,7 @@ export function parseReportBlock(value: unknown): ReportBlock | null {
         const id = reportStr(irec.id);
         const text = reportStr(irec.text) ?? id;
         if (!text) continue; // an item needs text
-        items.push({ id, text, status: reportStr(irec.status) });
+        items.push({ id, text, status: reportStr(irec.status), ref: reportStr(irec.ref) });
       }
     }
 

@@ -114,6 +114,28 @@ describe('parseReportBlock', () => {
     expect(parseReportBlock({ plans: [{ title: 99 }] })).toBeNull();
   });
 
+  it('parses an actionable item ref, trimmed; drops a blank/non-string ref', () => {
+    const block = parseReportBlock({
+      plans: [
+        {
+          title: 'Fleet update',
+          items: [
+            { text: 'blocked', status: 'blocked', ref: '  escalation:abc123  ' },
+            { text: 'no ref' },
+            { text: 'blank ref', ref: '   ' },
+            { text: 'numeric ref', ref: 42 },
+          ],
+        },
+      ],
+    });
+    expect(block?.plans[0]?.items).toEqual([
+      { id: undefined, text: 'blocked', status: 'blocked', ref: 'escalation:abc123' },
+      { id: undefined, text: 'no ref', status: undefined, ref: undefined },
+      { id: undefined, text: 'blank ref', status: undefined, ref: undefined },
+      { id: undefined, text: 'numeric ref', status: undefined, ref: undefined },
+    ]);
+  });
+
   it('never throws on hostile shapes', () => {
     expect(() => parseReportBlock({ plans: [null, 1, 'x', { title: 'ok', items: [null, 7] }] })).not.toThrow();
     const block = parseReportBlock({ plans: [null, 1, 'x', { title: 'ok', items: [null, 7] }] });
