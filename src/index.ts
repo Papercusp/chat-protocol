@@ -16,7 +16,15 @@
 // (Generalized from papercusp's CardSpec/CardResponse/OpenCardSnapshot.)
 // ---------------------------------------------------------------------------
 
-export type CardPresentationKind = 'radio' | 'checkbox' | 'text' | 'date' | 'slider';
+/**
+ * `select` is single-choice rendered COMPACT (a dropdown) — same answer shape
+ * as `radio`, which renders one full-width row per option. Added with its
+ * tooldef twin (libs/generic/tooldef CardPresentation) 2026-07-27: this wire
+ * union and that one are structurally coupled (tooldef's OpenCardSnapshot is
+ * constrained by this module's), so a kind added to one and not the other is a
+ * compile error rather than a silently untransportable card.
+ */
+export type CardPresentationKind = 'radio' | 'checkbox' | 'text' | 'date' | 'slider' | 'select';
 
 export interface CardOption {
   /** Stable id returned in the response (e.g. "grade_a"). */
