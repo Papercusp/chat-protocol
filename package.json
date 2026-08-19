@@ -18,6 +18,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@papercusp/test-config": "*",
     "vitest": "^4.1.4"
   },
   "publishConfig": {
