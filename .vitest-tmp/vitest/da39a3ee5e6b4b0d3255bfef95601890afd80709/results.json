@@ -1,1 +1,1 @@
-{"version":"4.1.10","results":[[":src/ask-block.test.ts",{"duration":12.789517999999987,"failed":false}],[":src/report-block.test.ts",{"duration":11.898217999999986,"failed":false}],[":src/channels.test.ts",{"duration":10.124498000000017,"failed":false}]]}
+{"version":"4.1.10","results":[[":src/ask-block.test.ts",{"duration":16.19575199999997,"failed":false}],[":src/report-block.test.ts",{"duration":14.314499000000012,"failed":false}],[":src/channels.test.ts",{"duration":13.348003000000006,"failed":false}]]}
