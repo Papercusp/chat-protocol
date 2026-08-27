@@ -1,57 +1,58 @@
-import type { OpenCardSnapshot } from './index';
+import type { OpenCardSnapshot } from "./index";
 
 /**
  * Stable, dependency-free wire contract between an SU-session host and clients
  * such as PUI. Runtime adapters may use provider SDKs internally, but none of
  * those types cross this boundary.
  */
-export const SU_SESSION_SCHEMA = 'papercusp.su-session/v1' as const;
+export const SU_SESSION_SCHEMA = "papercusp.su-session/v1" as const;
 export const SU_SESSION_PROTOCOL_VERSION = 1 as const;
 
-export const SU_SESSION_BACKENDS = ['claude', 'codex', 'omp'] as const;
+export const SU_SESSION_BACKENDS = ["claude", "codex", "omp"] as const;
 export type SuSessionBackend = (typeof SU_SESSION_BACKENDS)[number];
 
 export const SU_SESSION_LIFECYCLE_STATES = [
-  'starting',
-  'ready',
-  'running',
-  'waiting-for-owner',
-  'interrupted',
-  'compacting',
-  'resuming',
-  'ended',
-  'failed',
+  "starting",
+  "ready",
+  "running",
+  "waiting-for-owner",
+  "interrupted",
+  "compacting",
+  "resuming",
+  "ended",
+  "failed",
 ] as const;
-export type SuSessionLifecycleState = (typeof SU_SESSION_LIFECYCLE_STATES)[number];
+export type SuSessionLifecycleState =
+  (typeof SU_SESSION_LIFECYCLE_STATES)[number];
 
 export const SU_SESSION_COMMAND_TYPES = [
-  'owner_turn',
-  'interrupt',
-  'resume',
-  'fork',
-  'focus',
-  'end',
+  "owner_turn",
+  "interrupt",
+  "resume",
+  "fork",
+  "focus",
+  "end",
 ] as const;
 export type SuSessionCommandType = (typeof SU_SESSION_COMMAND_TYPES)[number];
 
 export const SU_SESSION_EVENT_TYPES = [
-  'session',
-  'lifecycle',
-  'command_result',
-  'transcript',
-  'tool',
-  'card',
-  'backend',
-  'error',
+  "session",
+  "lifecycle",
+  "command_result",
+  "transcript",
+  "tool",
+  "card",
+  "backend",
+  "error",
 ] as const;
 export type SuSessionEventType = (typeof SU_SESSION_EVENT_TYPES)[number];
 
 export const SU_SESSION_FEATURES = [
-  'tool-events',
-  'interactive-cards',
-  'reasoning-stream',
-  'usage',
-  'compaction',
+  "tool-events",
+  "interactive-cards",
+  "reasoning-stream",
+  "usage",
+  "compaction",
 ] as const;
 export type SuSessionFeature = (typeof SU_SESSION_FEATURES)[number];
 
@@ -69,7 +70,9 @@ export type SuSessionJsonValue =
  * `agentChatId` binds the contract to the existing agent-chats transport;
  * `advSessionId` plus the backend-native id govern reconciliation/resume.
  */
-export interface SuSessionIdentity<B extends SuSessionBackend = SuSessionBackend> {
+export interface SuSessionIdentity<
+  B extends SuSessionBackend = SuSessionBackend,
+> {
   agentChatId: string;
   advSessionId: number;
   backend: B;
@@ -96,10 +99,11 @@ export interface SuSessionBackendExtensionMap {
   };
 }
 
-export type SuSessionBackendExtension<B extends SuSessionBackend = SuSessionBackend> =
-  B extends SuSessionBackend
-    ? { backend: B } & SuSessionBackendExtensionMap[B]
-    : never;
+export type SuSessionBackendExtension<
+  B extends SuSessionBackend = SuSessionBackend,
+> = B extends SuSessionBackend
+  ? { backend: B } & SuSessionBackendExtensionMap[B]
+  : never;
 
 /**
  * `host` means Papercusp supplies the behavior around the native runtime (for
@@ -107,9 +111,9 @@ export type SuSessionBackendExtension<B extends SuSessionBackend = SuSessionBack
  * backend behavior must remain visible instead of being silently imitated.
  */
 export type SuSessionCapabilitySupport =
-  | { state: 'supported'; implementation: 'native' | 'host' }
-  | { state: 'conditional'; implementation: 'native' | 'host'; reason: string }
-  | { state: 'unsupported'; reason: string };
+  | { state: "supported"; implementation: "native" | "host" }
+  | { state: "conditional"; implementation: "native" | "host"; reason: string }
+  | { state: "unsupported"; reason: string };
 
 export interface SuSessionCapabilities {
   commands: Readonly<Record<SuSessionCommandType, SuSessionCapabilitySupport>>;
@@ -123,10 +127,10 @@ export type SuSessionDescriptor<B extends SuSessionBackend = SuSessionBackend> =
         lifecycle: SuSessionLifecycleState;
         /** Increments when a replacement runtime attaches to the same identity. */
         runtimeGeneration: number;
-        role: 'su';
+        role: "su";
         model: string | null;
         accountRoute: string | null;
-        carry: 'warm' | 'cold';
+        carry: "warm" | "cold";
         modes: readonly string[];
         capabilities: SuSessionCapabilities;
         backendExtension: SuSessionBackendExtension<B>;
@@ -146,22 +150,22 @@ export interface SuSessionCommandBase<
 }
 
 export type SuSessionCommandFor<B extends SuSessionBackend> =
-  | (SuSessionCommandBase<B, 'owner_turn'> & {
+  | (SuSessionCommandBase<B, "owner_turn"> & {
       turnId: string;
       content: string;
     })
-  | (SuSessionCommandBase<B, 'interrupt'> & {
+  | (SuSessionCommandBase<B, "interrupt"> & {
       reason?: string;
     })
-  | (SuSessionCommandBase<B, 'resume'> & {
-      cause: 'owner' | 'pui-restart' | 'runtime-replacement' | 'compaction';
+  | (SuSessionCommandBase<B, "resume"> & {
+      cause: "owner" | "pui-restart" | "runtime-replacement" | "compaction";
     })
-  | (SuSessionCommandBase<B, 'fork'> & {
+  | (SuSessionCommandBase<B, "fork"> & {
       /** Omit to fork from the latest acknowledged sequence. */
       fromSequence?: number;
     })
-  | SuSessionCommandBase<B, 'focus'>
-  | (SuSessionCommandBase<B, 'end'> & {
+  | SuSessionCommandBase<B, "focus">
+  | (SuSessionCommandBase<B, "end"> & {
       reason?: string;
     });
 
@@ -189,87 +193,101 @@ export interface SuSessionRefusal {
 }
 
 export type SuSessionCommandResultEvent<B extends SuSessionBackend> =
-  SuSessionEventBase<B, 'command_result'> &
+  SuSessionEventBase<B, "command_result"> &
     (
       | {
           commandId: string;
           commandType: SuSessionCommandType;
-          status: 'accepted' | 'completed';
+          status: "accepted";
         }
       | {
           commandId: string;
           commandType: SuSessionCommandType;
-          status: 'refused';
+          status: "completed";
+        }
+      | {
+          commandId: string;
+          commandType: SuSessionCommandType;
+          status: "refused";
           refusal: SuSessionRefusal;
         }
     );
 
 export type SuSessionTranscriptEvent<B extends SuSessionBackend> =
-  SuSessionEventBase<B, 'transcript'> &
+  SuSessionEventBase<B, "transcript"> &
     (
       | {
-          phase: 'started';
+          phase: "started";
           turnId: string;
-          role: 'owner' | 'assistant' | 'system';
-          channel: 'text' | 'reasoning';
+          role: "owner" | "assistant" | "system";
+          channel: "text" | "reasoning";
         }
       | {
-          phase: 'delta';
+          phase: "delta";
           turnId: string;
-          role: 'owner' | 'assistant' | 'system';
-          channel: 'text' | 'reasoning';
+          role: "owner" | "assistant" | "system";
+          channel: "text" | "reasoning";
           content: string;
         }
       | {
-          phase: 'completed';
+          phase: "completed";
           turnId: string;
-          role: 'owner' | 'assistant' | 'system';
-          channel: 'text' | 'reasoning';
+          role: "owner" | "assistant" | "system";
+          channel: "text" | "reasoning";
           content?: string;
         }
     );
 
-export type SuSessionToolEvent<B extends SuSessionBackend> =
-  SuSessionEventBase<B, 'tool'> &
-    (
-      | {
-          phase: 'started';
-          turnId: string;
-          callId: string;
-          name: string;
-          input?: SuSessionJsonValue;
-        }
-      | {
-          phase: 'completed';
-          turnId: string;
-          callId: string;
-          name: string;
-          output?: SuSessionJsonValue;
-          isError: boolean;
-        }
-    );
+export type SuSessionToolEvent<B extends SuSessionBackend> = SuSessionEventBase<
+  B,
+  "tool"
+> &
+  (
+    | {
+        phase: "started";
+        turnId: string;
+        callId: string;
+        name: string;
+        input?: SuSessionJsonValue;
+      }
+    | {
+        phase: "completed";
+        turnId: string;
+        callId: string;
+        name: string;
+        output?: SuSessionJsonValue;
+        isError: boolean;
+      }
+  );
 
-export type SuSessionCardEvent<B extends SuSessionBackend> =
-  SuSessionEventBase<B, 'card'> &
-    (
-      | {
-          phase: 'opened';
-          turnId: string;
-          card: OpenCardSnapshot;
-        }
-      | {
-          phase: 'closed';
-          turnId: string;
-          correlationId: string;
-          resolution: 'submitted' | 'declined' | 'cancelled' | 'expired' | 'interrupted';
-        }
-    );
+export type SuSessionCardEvent<B extends SuSessionBackend> = SuSessionEventBase<
+  B,
+  "card"
+> &
+  (
+    | {
+        phase: "opened";
+        turnId: string;
+        card: OpenCardSnapshot;
+      }
+    | {
+        phase: "closed";
+        turnId: string;
+        correlationId: string;
+        resolution:
+          | "submitted"
+          | "declined"
+          | "cancelled"
+          | "expired"
+          | "interrupted";
+      }
+  );
 
 export type SuSessionEventFor<B extends SuSessionBackend> =
-  | (SuSessionEventBase<B, 'session'> & {
+  | (SuSessionEventBase<B, "session"> & {
       descriptor: SuSessionDescriptor<B>;
     })
-  | (SuSessionEventBase<B, 'lifecycle'> & {
+  | (SuSessionEventBase<B, "lifecycle"> & {
       previousState: SuSessionLifecycleState | null;
       state: SuSessionLifecycleState;
       runtimeGeneration: number;
@@ -279,11 +297,11 @@ export type SuSessionEventFor<B extends SuSessionBackend> =
   | SuSessionTranscriptEvent<B>
   | SuSessionToolEvent<B>
   | SuSessionCardEvent<B>
-  | (SuSessionEventBase<B, 'backend'> & {
+  | (SuSessionEventBase<B, "backend"> & {
       extension: SuSessionBackendExtension<B>;
     })
-  | (SuSessionEventBase<B, 'error'> & {
-      scope: 'session' | 'command' | 'turn' | 'transport';
+  | (SuSessionEventBase<B, "error"> & {
+      scope: "session" | "command" | "turn" | "transport";
       code: string;
       message: string;
       recoverable: boolean;
@@ -298,19 +316,27 @@ export function isSuSessionBackend(value: string): value is SuSessionBackend {
   return (SU_SESSION_BACKENDS as readonly string[]).includes(value);
 }
 
-export function isSuSessionLifecycleState(value: string): value is SuSessionLifecycleState {
+export function isSuSessionLifecycleState(
+  value: string,
+): value is SuSessionLifecycleState {
   return (SU_SESSION_LIFECYCLE_STATES as readonly string[]).includes(value);
 }
 
-export function isSuSessionCommandType(value: string): value is SuSessionCommandType {
+export function isSuSessionCommandType(
+  value: string,
+): value is SuSessionCommandType {
   return (SU_SESSION_COMMAND_TYPES as readonly string[]).includes(value);
 }
 
-export function isSuSessionEventType(value: string): value is SuSessionEventType {
+export function isSuSessionEventType(
+  value: string,
+): value is SuSessionEventType {
   return (SU_SESSION_EVENT_TYPES as readonly string[]).includes(value);
 }
 
 /** Use in switch defaults so a new union member strands every incomplete handler. */
 export function assertNeverSuSession(value: never): never {
-  throw new Error(`Unhandled SU-session contract member: ${JSON.stringify(value)}`);
+  throw new Error(
+    `Unhandled SU-session contract member: ${JSON.stringify(value)}`,
+  );
 }
