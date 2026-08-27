@@ -419,3 +419,5 @@ export function isStateChannelEvent(type: ChatEventType): boolean {
 export function isReplayableEvent(type: ChatEventType): boolean {
   return (EVENT_CHANNEL_TYPES as readonly string[]).includes(type);
 }
+
+export * from './su-session';
