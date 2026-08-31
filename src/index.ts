@@ -420,5 +420,5 @@ export function isReplayableEvent(type: ChatEventType): boolean {
   return (EVENT_CHANNEL_TYPES as readonly string[]).includes(type);
 }
 
-export * from './su-session';
-export * from './voice';
+export * from './su-session.js';
+export * from './voice.js';
