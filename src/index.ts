@@ -421,3 +421,4 @@ export function isReplayableEvent(type: ChatEventType): boolean {
 }
 
 export * from './su-session';
+export * from './voice';
