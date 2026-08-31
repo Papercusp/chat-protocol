@@ -1,4 +1,4 @@
-import type { OpenCardSnapshot } from "./index";
+import type { OpenCardSnapshot } from "./index.js";
 
 /**
  * Stable, dependency-free wire contract between an SU-session host and clients
