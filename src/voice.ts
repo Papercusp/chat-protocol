@@ -388,10 +388,13 @@ class CanonicalVoiceTurnExecutorSession<TContext> implements VoiceTurnExecutorSe
     const descriptorId = text(options.descriptor.id, 300);
     const latencyClass = enumValue(options.descriptor.latencyClass, VOICE_LATENCY_CLASSES);
     const delivery = enumValue(options.descriptor.delivery, ['streaming', 'deliberative'] as const);
+    if (!descriptorId || !latencyClass || !delivery) {
+      throw new TypeError('voice executor descriptor is invalid');
+    }
     const supported = options.descriptor.supportedLatencyClasses === undefined
       ? [latencyClass]
       : uniqueEnumArray(options.descriptor.supportedLatencyClasses, VOICE_LATENCY_CLASSES);
-    if (!descriptorId || !latencyClass || !delivery || !supported || !supported.includes(latencyClass)) {
+    if (!supported || !supported.includes(latencyClass)) {
       throw new TypeError('voice executor descriptor is invalid');
     }
     const turn = frozenCanonicalTurn(options.request.turn);
