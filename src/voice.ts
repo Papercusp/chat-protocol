@@ -101,6 +101,69 @@ export type VoiceTurnEvent =
   | (VoiceTurnEventBase & { type: 'completed'; metrics: VoiceTurnMetrics })
   | (VoiceTurnEventBase & { type: 'error'; code: string; message: string; retryable: boolean });
 
+/**
+ * Server-shaped input shared by every voice executor. `context` deliberately
+ * stays generic: the wire contract owns authority while each server owns the
+ * concrete, policy-filtered vault projection it attaches to a turn.
+ */
+export interface VoiceExecutorRequest<TContext = unknown> {
+  readonly turn: VoiceTurnRequest;
+  readonly context: TContext;
+}
+
+export interface VoiceTurnExecutorDescriptor {
+  /** Stable implementation label written to completion metrics. */
+  readonly id: string;
+  readonly latencyClass: VoiceLatencyClass;
+  /** Observable implementation class; never an authority or persona choice. */
+  readonly delivery: 'streaming' | 'deliberative';
+}
+
+export type VoiceTurnEventSink = (event: VoiceTurnEvent) => void | Promise<void>;
+
+export interface VoiceTurnExecutorError {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+/**
+ * One active executor turn. Media/provider adapters translate their native
+ * callbacks into these four operations; this object owns canonical event
+ * ordering, one terminal settlement, and first-sentence/total latency.
+ */
+export interface VoiceTurnExecutorSession<TContext = unknown> {
+  readonly descriptor: VoiceTurnExecutorDescriptor;
+  readonly request: Readonly<VoiceExecutorRequest<TContext>>;
+  readonly active: boolean;
+  assistantSentence(text: string): VoiceTurnEvent | null;
+  complete(): VoiceTurnEvent | null;
+  interrupt(reason: 'user' | 'transport' | 'policy'): VoiceTurnEvent | null;
+  error(error: VoiceTurnExecutorError): VoiceTurnEvent | null;
+}
+
+/**
+ * Shared lifecycle seam implemented by the low-latency and deliberative
+ * adapters. Selection happens by `descriptor.latencyClass`; implementations
+ * receive the already-resolved request and cannot replace its authority.
+ */
+export interface VoiceTurnExecutor<TContext = unknown> {
+  readonly descriptor: VoiceTurnExecutorDescriptor;
+  begin(
+    request: Readonly<VoiceExecutorRequest<TContext>>,
+    emit: VoiceTurnEventSink,
+  ): VoiceTurnExecutorSession<TContext>;
+}
+
+export interface CreateVoiceTurnExecutorSessionOptions<TContext> {
+  descriptor: VoiceTurnExecutorDescriptor;
+  request: Readonly<VoiceExecutorRequest<TContext>>;
+  emit: VoiceTurnEventSink;
+  now?: () => number;
+  /** Defaults to the canonical transcript occurrence time. */
+  startedAtMs?: number;
+}
+
 type JsonRecord = Record<string, unknown>;
 
 function record(value: unknown): JsonRecord | null {
