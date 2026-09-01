@@ -420,5 +420,8 @@ export function isReplayableEvent(type: ChatEventType): boolean {
   return (EVENT_CHANNEL_TYPES as readonly string[]).includes(type);
 }
 
-export * from './su-session.js';
-export * from './voice.js';
+// Keep these source exports extensionless so bundlers that consume the
+// TypeScript package directly (not a prebuilt dist/) resolve the sibling .ts
+// modules. Runtime ESM builds still append .js when they emit the package.
+export * from './su-session';
+export * from './voice';
