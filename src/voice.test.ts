@@ -202,7 +202,7 @@ describe('shared voice executor lifecycle', () => {
     const session = createVoiceTurnExecutorSession({
       descriptor: streaming,
       request: { turn, context: { status: 'ready' } },
-      emit: (event) => events.push(event),
+      emit: (event) => { events.push(event); },
       now: () => now,
     });
 
@@ -261,7 +261,7 @@ describe('shared voice executor lifecycle', () => {
     const session = createVoiceTurnExecutorSession({
       descriptor: streaming,
       request: { turn: ownerTurn({ latencyClass: 'interactive' }), context: null },
-      emit: (event) => events.push(event),
+      emit: (event) => { events.push(event); },
     });
     expect(session.interrupt('policy')?.type).toBe('interruption');
     expect(session.error({ code: 'late', message: 'late failure', retryable: false })).toBeNull();
