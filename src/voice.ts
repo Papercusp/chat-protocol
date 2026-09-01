@@ -135,6 +135,7 @@ export interface VoiceTurnExecutorError {
 export interface VoiceTurnExecutorSession<TContext = unknown> {
   readonly descriptor: VoiceTurnExecutorDescriptor;
   readonly request: Readonly<VoiceExecutorRequest<TContext>>;
+  readonly transcriptEvent: Extract<VoiceTurnEvent, { type: 'transcript.final' }>;
   readonly active: boolean;
   assistantSentence(text: string): VoiceTurnEvent | null;
   complete(): VoiceTurnEvent | null;
@@ -373,6 +374,7 @@ function executorNow(clock: () => number): number {
 class CanonicalVoiceTurnExecutorSession<TContext> implements VoiceTurnExecutorSession<TContext> {
   readonly descriptor: VoiceTurnExecutorDescriptor;
   readonly request: Readonly<VoiceExecutorRequest<TContext>>;
+  readonly transcriptEvent: Extract<VoiceTurnEvent, { type: 'transcript.final' }>;
   private readonly now: () => number;
   private readonly startedAtMs: number;
   private eventSequence = 0;
@@ -401,7 +403,7 @@ class CanonicalVoiceTurnExecutorSession<TContext> implements VoiceTurnExecutorSe
     this.startedAtMs = typeof suppliedStart === 'number' && Number.isFinite(suppliedStart) && suppliedStart >= 0
       ? suppliedStart
       : occurredAtMs;
-    this.publish({
+    const transcriptEvent = this.publish({
       version: VOICE_PROTOCOL_VERSION,
       type: 'transcript.final',
       turnId: turn.turnId,
@@ -409,6 +411,10 @@ class CanonicalVoiceTurnExecutorSession<TContext> implements VoiceTurnExecutorSe
       emittedAt: new Date(this.startedAtMs).toISOString(),
       text: turn.transcript,
     });
+    if (!transcriptEvent || transcriptEvent.type !== 'transcript.final') {
+      throw new TypeError('voice executor could not construct its transcript event');
+    }
+    this.transcriptEvent = transcriptEvent;
   }
 
   get active(): boolean {
