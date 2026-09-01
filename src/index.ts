@@ -420,8 +420,10 @@ export function isReplayableEvent(type: ChatEventType): boolean {
   return (EVENT_CHANNEL_TYPES as readonly string[]).includes(type);
 }
 
-// Keep these source exports extensionless so bundlers that consume the
-// TypeScript package directly (not a prebuilt dist/) resolve the sibling .ts
-// modules. Runtime ESM builds still append .js when they emit the package.
-export * from './su-session';
-export * from './voice';
+// Use the emitted ESM suffix in source specifiers. TypeScript's NodeNext
+// consumers (including the standalone Phone worker) resolve this package's
+// source entry directly and reject extensionless relative exports; bundlers
+// still map the `.js` specifier to the sibling `.ts` source during a source
+// build, while emitted ESM keeps the same specifier unchanged.
+export * from './su-session.js';
+export * from './voice.js';
