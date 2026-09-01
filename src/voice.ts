@@ -349,6 +349,173 @@ export function parseVoiceTurnEvent(value: unknown): VoiceTurnEvent | null {
   }
 }
 
+function frozenCanonicalTurn(value: VoiceTurnRequest): VoiceTurnRequest {
+  const turn = parseVoiceTurnRequest(value);
+  if (!turn) throw new TypeError('voice executor received an invalid canonical turn');
+  Object.freeze(turn.principal);
+  Object.freeze(turn.conversation);
+  Object.freeze(turn.capabilities.read);
+  Object.freeze(turn.capabilities.write);
+  Object.freeze(turn.capabilities.tools);
+  Object.freeze(turn.capabilities);
+  return Object.freeze(turn);
+}
+
+function executorNow(clock: () => number): number {
+  try {
+    const value = clock();
+    return Number.isFinite(value) && value >= 0 ? value : Date.now();
+  } catch {
+    return Date.now();
+  }
+}
+
+class CanonicalVoiceTurnExecutorSession<TContext> implements VoiceTurnExecutorSession<TContext> {
+  readonly descriptor: VoiceTurnExecutorDescriptor;
+  readonly request: Readonly<VoiceExecutorRequest<TContext>>;
+  private readonly now: () => number;
+  private readonly startedAtMs: number;
+  private eventSequence = 0;
+  private sentenceIndex = 0;
+  private firstSentenceMs: number | null = null;
+  private settled = false;
+
+  constructor(private readonly options: CreateVoiceTurnExecutorSessionOptions<TContext>) {
+    const descriptorId = text(options.descriptor.id, 300);
+    const latencyClass = enumValue(options.descriptor.latencyClass, VOICE_LATENCY_CLASSES);
+    const delivery = enumValue(options.descriptor.delivery, ['streaming', 'deliberative'] as const);
+    if (!descriptorId || !latencyClass || !delivery) {
+      throw new TypeError('voice executor descriptor is invalid');
+    }
+    const turn = frozenCanonicalTurn(options.request.turn);
+    if (turn.latencyClass !== latencyClass) {
+      throw new TypeError(
+        `voice executor ${descriptorId} cannot handle ${turn.latencyClass} turns`,
+      );
+    }
+    this.descriptor = Object.freeze({ id: descriptorId, latencyClass, delivery });
+    this.request = Object.freeze({ turn, context: options.request.context });
+    this.now = options.now ?? Date.now;
+    const occurredAtMs = Date.parse(turn.occurredAt);
+    const suppliedStart = options.startedAtMs;
+    this.startedAtMs = typeof suppliedStart === 'number' && Number.isFinite(suppliedStart) && suppliedStart >= 0
+      ? suppliedStart
+      : occurredAtMs;
+    this.publish({
+      version: VOICE_PROTOCOL_VERSION,
+      type: 'transcript.final',
+      turnId: turn.turnId,
+      sequence: 0,
+      emittedAt: new Date(this.startedAtMs).toISOString(),
+      text: turn.transcript,
+    });
+  }
+
+  get active(): boolean {
+    return !this.settled;
+  }
+
+  assistantSentence(value: string): VoiceTurnEvent | null {
+    const sentence = text(value);
+    if (this.settled || !sentence) return null;
+    const nowMs = executorNow(this.now);
+    if (this.firstSentenceMs === null) {
+      this.firstSentenceMs = Math.max(0, nowMs - this.startedAtMs);
+    }
+    this.eventSequence += 1;
+    const event = this.publish({
+      version: VOICE_PROTOCOL_VERSION,
+      type: 'assistant.sentence',
+      turnId: this.request.turn.turnId,
+      sequence: this.eventSequence,
+      emittedAt: new Date(nowMs).toISOString(),
+      text: sentence,
+      sentenceIndex: this.sentenceIndex,
+    });
+    if (event) this.sentenceIndex += 1;
+    return event;
+  }
+
+  complete(): VoiceTurnEvent | null {
+    if (this.settled) return null;
+    const nowMs = executorNow(this.now);
+    this.eventSequence += 1;
+    this.settled = true;
+    return this.publish({
+      version: VOICE_PROTOCOL_VERSION,
+      type: 'completed',
+      turnId: this.request.turn.turnId,
+      sequence: this.eventSequence,
+      emittedAt: new Date(nowMs).toISOString(),
+      metrics: {
+        executor: this.descriptor.id,
+        latencyClass: this.descriptor.latencyClass,
+        firstSentenceMs: this.firstSentenceMs,
+        totalMs: Math.max(0, nowMs - this.startedAtMs),
+      },
+    });
+  }
+
+  interrupt(reason: 'user' | 'transport' | 'policy'): VoiceTurnEvent | null {
+    if (this.settled) return null;
+    const parsedReason = enumValue(reason, ['user', 'transport', 'policy'] as const);
+    if (!parsedReason) return null;
+    this.eventSequence += 1;
+    this.settled = true;
+    return this.publish({
+      version: VOICE_PROTOCOL_VERSION,
+      type: 'interruption',
+      turnId: this.request.turn.turnId,
+      sequence: this.eventSequence,
+      emittedAt: new Date(executorNow(this.now)).toISOString(),
+      reason: parsedReason,
+    });
+  }
+
+  error(input: VoiceTurnExecutorError): VoiceTurnEvent | null {
+    const code = text(input.code, 200);
+    const message = text(input.message, 4_000);
+    if (this.settled || !code || !message) return null;
+    this.eventSequence += 1;
+    this.settled = true;
+    return this.publish({
+      version: VOICE_PROTOCOL_VERSION,
+      type: 'error',
+      turnId: this.request.turn.turnId,
+      sequence: this.eventSequence,
+      emittedAt: new Date(executorNow(this.now)).toISOString(),
+      code,
+      message,
+      retryable: input.retryable === true,
+    });
+  }
+
+  private publish(candidate: VoiceTurnEvent): VoiceTurnEvent | null {
+    const event = parseVoiceTurnEvent(candidate);
+    if (!event) return null;
+    try {
+      const result = this.options.emit(event);
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        void (result as Promise<void>).catch(() => {});
+      }
+    } catch {
+      // Contract observation must never break the provider/media lifecycle.
+    }
+    return event;
+  }
+}
+
+/**
+ * Build the canonical lifecycle used by every concrete executor adapter.
+ * Construction emits `transcript.final`; exactly one terminal event may then
+ * follow zero or more ordered `assistant.sentence` events.
+ */
+export function createVoiceTurnExecutorSession<TContext>(
+  options: CreateVoiceTurnExecutorSessionOptions<TContext>,
+): VoiceTurnExecutorSession<TContext> {
+  return new CanonicalVoiceTurnExecutorSession(options);
+}
+
 export function parseVoiceTurnRequestJson(json: string): VoiceTurnRequest | null {
   try {
     return parseVoiceTurnRequest(JSON.parse(json));

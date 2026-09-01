@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   VOICE_PROTOCOL_VERSION,
+  createVoiceTurnExecutorSession,
   parseVoiceCapabilityEnvelope,
   parseVoicePrincipal,
   parseVoiceTurnEvent,
@@ -10,6 +11,7 @@ import {
   serializeVoiceTurnEvent,
   serializeVoiceTurnRequest,
   type VoiceTurnEvent,
+  type VoiceTurnExecutorDescriptor,
   type VoiceTurnRequest,
 } from './voice';
 
@@ -178,5 +180,103 @@ describe('voice turn event contract', () => {
     expect(parseVoiceTurnEvent({ ...completed, metrics: { ...completed.metrics, totalMs: -1 } })).toBeNull();
     expect(parseVoiceTurnEvent({ ...completed, type: 'assistant.secret' })).toBeNull();
     expect(parseVoiceTurnEventJson('[]')).toBeNull();
+  });
+});
+
+describe('shared voice executor lifecycle', () => {
+  const streaming: VoiceTurnExecutorDescriptor = {
+    id: 'gemini-streaming',
+    latencyClass: 'interactive',
+    delivery: 'streaming',
+  };
+
+  it('emits one canonical ordered lifecycle with first-sentence and total latency', () => {
+    const startedAtMs = Date.parse('2026-08-31T18:00:00.000Z');
+    let now = startedAtMs;
+    const events: VoiceTurnEvent[] = [];
+    const turn = ownerTurn({
+      turnId: 'executor-turn-1',
+      occurredAt: new Date(startedAtMs).toISOString(),
+      latencyClass: 'interactive',
+    });
+    const session = createVoiceTurnExecutorSession({
+      descriptor: streaming,
+      request: { turn, context: { status: 'ready' } },
+      emit: (event) => events.push(event),
+      now: () => now,
+    });
+
+    now += 90;
+    session.assistantSentence('First sentence.');
+    now += 160;
+    session.assistantSentence('Second sentence.');
+    now += 50;
+    session.complete();
+
+    expect(events.map((event) => event.type)).toEqual([
+      'transcript.final',
+      'assistant.sentence',
+      'assistant.sentence',
+      'completed',
+    ]);
+    expect(events.map((event) => event.sequence)).toEqual([0, 1, 2, 3]);
+    expect(events[1]).toMatchObject({ sentenceIndex: 0, text: 'First sentence.' });
+    expect(events[2]).toMatchObject({ sentenceIndex: 1, text: 'Second sentence.' });
+    expect(events[3]).toMatchObject({
+      metrics: {
+        executor: 'gemini-streaming',
+        latencyClass: 'interactive',
+        firstSentenceMs: 90,
+        totalMs: 300,
+      },
+    });
+    expect(session.active).toBe(false);
+    expect(session.complete()).toBeNull();
+    expect(session.assistantSentence('too late')).toBeNull();
+  });
+
+  it('snapshots and freezes server-selected authority before executor dispatch', () => {
+    const turn = ownerTurn({ latencyClass: 'interactive' });
+    const session = createVoiceTurnExecutorSession({
+      descriptor: streaming,
+      request: { turn, context: { source: 'server-vault' } },
+      emit: () => {},
+    });
+
+    turn.capabilities.tools.push('untrusted:later-mutation');
+    expect(session.request.turn.capabilities.tools).toEqual(['calendar:list', 'email:draft']);
+    expect(() => session.request.turn.capabilities.tools.push('untrusted:executor-mutation'))
+      .toThrow();
+    expect(session.request.turn.principal).toEqual(turn.principal);
+  });
+
+  it('rejects latency-class mismatches and settles only one terminal event', () => {
+    expect(() => createVoiceTurnExecutorSession({
+      descriptor: streaming,
+      request: { turn: ownerTurn(), context: null },
+      emit: () => {},
+    })).toThrow(/cannot handle deliberative turns/);
+
+    const events: VoiceTurnEvent[] = [];
+    const session = createVoiceTurnExecutorSession({
+      descriptor: streaming,
+      request: { turn: ownerTurn({ latencyClass: 'interactive' }), context: null },
+      emit: (event) => events.push(event),
+    });
+    expect(session.interrupt('policy')?.type).toBe('interruption');
+    expect(session.error({ code: 'late', message: 'late failure', retryable: false })).toBeNull();
+    expect(events.map((event) => event.type)).toEqual(['transcript.final', 'interruption']);
+  });
+
+  it('keeps a failing observation sink off the executor/media path', () => {
+    const session = createVoiceTurnExecutorSession({
+      descriptor: streaming,
+      request: { turn: ownerTurn({ latencyClass: 'interactive' }), context: null },
+      emit: () => { throw new Error('telemetry unavailable'); },
+    });
+    expect(() => {
+      session.assistantSentence('Still speaking.');
+      session.complete();
+    }).not.toThrow();
   });
 });
