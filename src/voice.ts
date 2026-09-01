@@ -115,6 +115,8 @@ export interface VoiceTurnExecutorDescriptor {
   /** Stable implementation label written to completion metrics. */
   readonly id: string;
   readonly latencyClass: VoiceLatencyClass;
+  /** Optional additional classes supported by a transport facade. */
+  readonly supportedLatencyClasses?: readonly VoiceLatencyClass[];
   /** Observable implementation class; never an authority or persona choice. */
   readonly delivery: 'streaming' | 'deliberative';
 }
@@ -139,7 +141,7 @@ export interface VoiceTurnExecutorSession<TContext = unknown> {
   readonly active: boolean;
   assistantSentence(text: string): VoiceTurnEvent | null;
   complete(): VoiceTurnEvent | null;
-  interrupt(reason: 'user' | 'transport' | 'policy'): VoiceTurnEvent | null;
+  interrupt(reason: 'user' | 'transport' | 'policy', atMs?: number): VoiceTurnEvent | null;
   error(error: VoiceTurnExecutorError): VoiceTurnEvent | null;
 }
 
@@ -386,17 +388,25 @@ class CanonicalVoiceTurnExecutorSession<TContext> implements VoiceTurnExecutorSe
     const descriptorId = text(options.descriptor.id, 300);
     const latencyClass = enumValue(options.descriptor.latencyClass, VOICE_LATENCY_CLASSES);
     const delivery = enumValue(options.descriptor.delivery, ['streaming', 'deliberative'] as const);
-    if (!descriptorId || !latencyClass || !delivery) {
+    const supported = options.descriptor.supportedLatencyClasses === undefined
+      ? [latencyClass]
+      : uniqueEnumArray(options.descriptor.supportedLatencyClasses, VOICE_LATENCY_CLASSES);
+    if (!descriptorId || !latencyClass || !delivery || !supported || !supported.includes(latencyClass)) {
       throw new TypeError('voice executor descriptor is invalid');
     }
     const turn = frozenCanonicalTurn(options.request.turn);
-    if (turn.latencyClass !== latencyClass) {
+    if (!supported.includes(turn.latencyClass)) {
       throw new TypeError(
         `voice executor ${descriptorId} cannot handle ${turn.latencyClass} turns`,
       );
     }
-    this.descriptor = Object.freeze({ id: descriptorId, latencyClass, delivery });
-    this.request = Object.freeze({ turn, context: options.request.context });
+    this.descriptor = Object.freeze({
+      id: descriptorId,
+      latencyClass,
+      delivery,
+      supportedLatencyClasses: Object.freeze([...supported]),
+    });
+    this.request = Object.freeze({ ...options.request, turn });
     this.now = options.now ?? Date.now;
     const occurredAtMs = Date.parse(turn.occurredAt);
     const suppliedStart = options.startedAtMs;
@@ -462,7 +472,7 @@ class CanonicalVoiceTurnExecutorSession<TContext> implements VoiceTurnExecutorSe
     });
   }
 
-  interrupt(reason: 'user' | 'transport' | 'policy'): VoiceTurnEvent | null {
+  interrupt(reason: 'user' | 'transport' | 'policy', atMs?: number): VoiceTurnEvent | null {
     if (this.settled) return null;
     const parsedReason = enumValue(reason, ['user', 'transport', 'policy'] as const);
     if (!parsedReason) return null;
@@ -473,7 +483,11 @@ class CanonicalVoiceTurnExecutorSession<TContext> implements VoiceTurnExecutorSe
       type: 'interruption',
       turnId: this.request.turn.turnId,
       sequence: this.eventSequence,
-      emittedAt: new Date(executorNow(this.now)).toISOString(),
+      emittedAt: new Date(
+        typeof atMs === 'number' && Number.isFinite(atMs) && atMs >= 0
+          ? atMs
+          : executorNow(this.now),
+      ).toISOString(),
       reason: parsedReason,
     });
   }
