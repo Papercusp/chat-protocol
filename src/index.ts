@@ -364,8 +364,20 @@ export type CardResponse =
  * Generic, domain-agnostic chat events. Consumers union their own domain events
  * onto this (e.g. `type ScoutEvent = ChatEvent | { type: 'products'; … }`).
  *
+ * On the SSE wire the event NAME is the discriminant (`event: delta`) and the
+ * `data` line is the JSON of the same object (it MAY repeat `type`); use
+ * {@link parseChatEvent} to normalise a received (name, data) pair.
+ *
+ * Vocabulary is the MEASURED wire (papercup-chat-one-component-one-contract
+ * D-008): both papercusp backends (operator:converse and the agent-loop chat
+ * engine) and both consumers (the desktop provider, the portal reducer) speak
+ * `delta` / `tool_call` / `provenance` / `error` / `done`. The earlier documented
+ * names `token` / `tool_start` were emitted and consumed by nothing and were
+ * renamed to match the wire, not aliased.
+ *
  * Three channels by convention (a complete partition of `ChatEvent['type']`):
- *  - EVENT channel (append-only, replayable): session, token, tool_start, done, error
+ *  - EVENT channel (append-only, replayable): session, delta, tool_call,
+ *    tool_result, provenance, done, error
  *  - STATE channel (last-write-wins, NOT replayed as history): card, card_closed, state
  *    — so a reconnect after answering a card never re-prompts.
  *  - TRANSIENT channel (fire-once actions, NOT replayed at all): navigate
@@ -377,12 +389,33 @@ export type CardResponse =
  */
 export type ChatEvent =
   | { type: 'session'; sessionId: string }
-  | { type: 'token'; content: string }
-  | { type: 'tool_start'; tool: string }
+  /** One streamed text fragment; consumers append `text`. */
+  | { type: 'delta'; text: string }
+  /**
+   * The model invoked a tool. `name` is the canonical catalog name (colon form,
+   * e.g. `chat:ask_choice`); `input` is the call's arguments when the emitter
+   * has them (the "tool_call detail" the transcript renders); `callId` pairs it
+   * with a later `tool_result`.
+   */
+  | { type: 'tool_call'; name: string; input?: unknown; callId?: string }
+  /** The tool returned. `ok:false` marks a tool-level failure the turn survived. */
+  | { type: 'tool_result'; name: string; callId?: string; ok?: boolean; summary?: string }
+  /**
+   * What will ACTUALLY run for this turn — announced before the first model
+   * event, and persisted with the turn so a reconnect never rewrites history
+   * from today's picker selection. `engine` is the runner (`loop`, `claude-code`,
+   * `codex`, `omp`, …), `model` the resolved model spec.
+   */
+  | { type: 'provenance'; engine: string; model: string; accountRoute?: string | null }
   | { type: 'card'; card: OpenCardSnapshot }
   | { type: 'card_closed'; correlationId: string }
   | { type: 'state'; version: number; snapshot: unknown }
-  | { type: 'done'; usage?: { totalTokens?: number; costUsd?: number } }
+  | {
+      type: 'done';
+      /** Why the turn ended (`complete`, `aborted`, `max_steps`, …); emitter-defined. */
+      stopReason?: string;
+      usage?: { totalTokens?: number; inputTokens?: number; outputTokens?: number; costUsd?: number };
+    }
   | { type: 'error'; message: string }
   // Generic page navigation — the assistant asks the client to go to a target
   // (a URL/route; the href is just data, so it's domain-agnostic). Transient
@@ -393,7 +426,15 @@ export type ChatEvent =
 export type ChatEventType = ChatEvent['type'];
 
 /** Event-channel types (append-only, safe to replay on reconnect). */
-export const EVENT_CHANNEL_TYPES = ['session', 'token', 'tool_start', 'done', 'error'] as const;
+export const EVENT_CHANNEL_TYPES = [
+  'session',
+  'delta',
+  'tool_call',
+  'tool_result',
+  'provenance',
+  'done',
+  'error',
+] as const;
 /** State-channel types (last-write-wins; do NOT replay as history). */
 export const STATE_CHANNEL_TYPES = ['card', 'card_closed', 'state'] as const;
 /**
@@ -418,6 +459,201 @@ export function isStateChannelEvent(type: ChatEventType): boolean {
  */
 export function isReplayableEvent(type: ChatEventType): boolean {
   return (EVENT_CHANNEL_TYPES as readonly string[]).includes(type);
+}
+
+const ALL_CHAT_EVENT_TYPES: ReadonlySet<string> = new Set<string>([
+  ...EVENT_CHANNEL_TYPES,
+  ...STATE_CHANNEL_TYPES,
+  ...TRANSIENT_CHANNEL_TYPES,
+]);
+
+/** True when `type` names a member of the `ChatEvent` union. */
+export function isChatEventType(type: string): type is ChatEventType {
+  return ALL_CHAT_EVENT_TYPES.has(type);
+}
+
+/**
+ * Normalise one received SSE frame into a `ChatEvent`, or null when it is not
+ * one. `eventName` is the SSE `event:` line (the discriminant on the wire);
+ * `data` is the already-JSON-parsed `data:` payload. A payload that repeats
+ * `type` must agree with the event name; a payload without it is stamped. The
+ * required field of each member is checked (so a `delta` without `text` is
+ * dropped, not rendered as "undefined") — optional detail is passed through.
+ * Never throws: a frame nobody chose to render (`heartbeat`, `run-meta`, a
+ * consumer's own domain event) is simply null, exactly as the host drops it.
+ */
+export function parseChatEvent(eventName: string, data: unknown): ChatEvent | null {
+  if (!isChatEventType(eventName)) return null;
+  const obj: Record<string, unknown> =
+    data && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>) : {};
+  if (typeof obj.type === 'string' && obj.type !== eventName) return null;
+  const str = (k: string): string | null => (typeof obj[k] === 'string' ? (obj[k] as string) : null);
+  switch (eventName) {
+    case 'session': {
+      const sessionId = str('sessionId');
+      return sessionId === null ? null : { type: 'session', sessionId };
+    }
+    case 'delta': {
+      const text = str('text');
+      return text === null ? null : { type: 'delta', text };
+    }
+    case 'tool_call': {
+      const name = str('name');
+      if (name === null || !name) return null;
+      const callId = str('callId');
+      return {
+        type: 'tool_call',
+        name,
+        ...(obj.input !== undefined ? { input: obj.input } : {}),
+        ...(callId !== null ? { callId } : {}),
+      };
+    }
+    case 'tool_result': {
+      const name = str('name');
+      if (name === null || !name) return null;
+      const callId = str('callId');
+      const summary = str('summary');
+      return {
+        type: 'tool_result',
+        name,
+        ...(callId !== null ? { callId } : {}),
+        ...(typeof obj.ok === 'boolean' ? { ok: obj.ok } : {}),
+        ...(summary !== null ? { summary } : {}),
+      };
+    }
+    case 'provenance': {
+      const engine = str('engine');
+      const model = str('model');
+      if (engine === null || model === null) return null;
+      const accountRoute = str('accountRoute');
+      return {
+        type: 'provenance',
+        engine,
+        model,
+        ...(accountRoute !== null ? { accountRoute } : obj.accountRoute === null ? { accountRoute: null } : {}),
+      };
+    }
+    case 'card': {
+      const card = obj.card;
+      if (!card || typeof card !== 'object' || Array.isArray(card)) return null;
+      const c = card as Record<string, unknown>;
+      if (typeof c.correlationId !== 'string' || typeof c.prompt !== 'string') return null;
+      return { type: 'card', card: card as OpenCardSnapshot };
+    }
+    case 'card_closed': {
+      const correlationId = str('correlationId');
+      return correlationId === null ? null : { type: 'card_closed', correlationId };
+    }
+    case 'state': {
+      const version = typeof obj.version === 'number' ? obj.version : 0;
+      return { type: 'state', version, snapshot: obj.snapshot };
+    }
+    case 'done': {
+      const stopReason = str('stopReason');
+      const usage =
+        obj.usage && typeof obj.usage === 'object' && !Array.isArray(obj.usage)
+          ? (obj.usage as Extract<ChatEvent, { type: 'done' }>['usage'])
+          : undefined;
+      return {
+        type: 'done',
+        ...(stopReason !== null ? { stopReason } : {}),
+        ...(usage ? { usage } : {}),
+      };
+    }
+    case 'error': {
+      const message = str('message');
+      return { type: 'error', message: message ?? 'stream error' };
+    }
+    case 'navigate': {
+      const href = str('href');
+      return href === null ? null : { type: 'navigate', href };
+    }
+    default:
+      return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Persisted history — the ONE transcript-turn shape both hosts render.
+// (papercup-chat-one-component-one-contract D-008 §3.)
+// ---------------------------------------------------------------------------
+
+export type ChatTurnRole = 'user' | 'assistant' | 'system';
+
+/**
+ * How the turn entered the conversation. `system` marks a system-authored
+ * assistant turn (a deterministic status update, never model output).
+ */
+export type ChatTurnSource = 'text_typed' | 'voice_stt' | 'voice_tts' | 'system';
+
+/**
+ * One tool invocation recorded on a persisted turn. A card the model asked
+ * through a tool (`chat:ask_choice`) is exactly such an entry, and its answer is
+ * `answered` — so "persisted cards in history" needs no second shape: an
+ * entry with `answered` renders as the answered card, without it as the tool row.
+ * `picks` is the stored form (`option_id`, snake_case): it is the persisted
+ * jsonb and is deliberately not re-cased on the wire.
+ */
+export interface ChatTurnToolCall {
+  name: string;
+  input?: unknown;
+  callId?: string;
+  /** Picks array — length 1 for single-select cards, ≥1 for multi. */
+  answered?: {
+    picks: Array<{ option_id: string; label: string }>;
+    /** epoch ms */
+    at: number;
+  };
+}
+
+/**
+ * A host-resolvable work reference the server found in `text` (so a renderer
+ * can hydrate a pill without a round-trip). `kind` is the ref family; `title` /
+ * `state` are present only when the host could resolve them — a public host
+ * that cannot resolve refs sends none, and the renderer shows plain text.
+ */
+export interface WorkRefHint {
+  ref: string;
+  kind: 'WI' | 'P' | 'EI' | 'F';
+  title?: string;
+  state?: string;
+}
+
+/** The `provenance` frame's payload as persisted with a turn. */
+export interface ChatTurnProvenance {
+  engine: string;
+  model: string;
+  accountRoute?: string | null;
+}
+
+/**
+ * One persisted transcript turn — what a history read returns and what the
+ * shared component renders on both hosts. `createdAt` is epoch ms (the
+ * message timestamp). `report` is the structured status card the turn carried
+ * (`<report>` / a deterministic update). `error:true` marks a failure-marker
+ * turn (the assistant produced no content; `text` is the message).
+ */
+export interface ChatTurn {
+  id: string;
+  /** Monotonic per-conversation sequence, when the store has one. */
+  seq?: number;
+  role: ChatTurnRole;
+  text: string;
+  /** epoch ms */
+  createdAt: number;
+  source?: ChatTurnSource;
+  tools?: ChatTurnToolCall[] | null;
+  report?: ReportBlock | null;
+  provenance?: ChatTurnProvenance | null;
+  error?: boolean;
+  workRefs?: WorkRefHint[];
+}
+
+/** One page of history, oldest first within the page. */
+export interface ChatTurnsPage {
+  turns: ChatTurn[];
+  /** True when at least one turn exists earlier than the lowest seq in `turns`. */
+  hasMoreEarlier: boolean;
 }
 
 // Use the emitted ESM suffix in source specifiers. TypeScript's NodeNext
