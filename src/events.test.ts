@@ -119,12 +119,13 @@ describe('ChatTurn — the one persisted-history shape', () => {
         {
           name: 'chat:ask_choice',
           input: { prompt: 'Which one?', options: [{ option_id: 'a', label: 'A' }] },
-          answered: { picks: [{ option_id: 'a', label: 'A' }], at: 1_757_000_001_000 },
+          answered: { picks: [{ option_id: 'a', label: 'A' }], declined: false, at: 1_757_000_001_000 },
         },
       ],
       report: null,
       provenance: { engine: 'claude-code', model: 'anthropic/claude-opus-4-7' },
       workRefs: [{ ref: 'WI-2147227', kind: 'WI', title: 'P-004', state: 'open' }],
+      planSlug: 'papercup-chat-one-component-one-contract-2026-09-06',
     };
     const page: ChatTurnsPage = { turns: [turn], hasMoreEarlier: false };
     const back = JSON.parse(JSON.stringify(page)) as ChatTurnsPage;
@@ -133,6 +134,8 @@ describe('ChatTurn — the one persisted-history shape', () => {
     const answered = back.turns[0].tools?.filter((t) => t.answered) ?? [];
     expect(answered).toHaveLength(1);
     expect(answered[0].answered?.picks[0].option_id).toBe('a');
+    expect(back.turns[0].planSlug).toBe('papercup-chat-one-component-one-contract-2026-09-06');
+    expect(back.turns[0].tools?.[0].answered?.declined).toBe(false);
   });
 
   it('a system-authored deterministic update is a ChatTurn with a report and source "system"', () => {
