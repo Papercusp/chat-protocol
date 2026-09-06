@@ -15,8 +15,10 @@ import {
 // action can never silently fall into the "replayed" default.
 const ALL_EVENT_TYPES: ChatEventType[] = [
   'session',
-  'token',
-  'tool_start',
+  'delta',
+  'tool_call',
+  'tool_result',
+  'provenance',
   'card',
   'card_closed',
   'state',
@@ -35,8 +37,10 @@ describe('channel classification', () => {
 
     it('is false for append-only event-channel events', () => {
       expect(isStateChannelEvent('session')).toBe(false);
-      expect(isStateChannelEvent('token')).toBe(false);
-      expect(isStateChannelEvent('tool_start')).toBe(false);
+      expect(isStateChannelEvent('delta')).toBe(false);
+      expect(isStateChannelEvent('tool_call')).toBe(false);
+      expect(isStateChannelEvent('tool_result')).toBe(false);
+      expect(isStateChannelEvent('provenance')).toBe(false);
       expect(isStateChannelEvent('done')).toBe(false);
       expect(isStateChannelEvent('error')).toBe(false);
     });
@@ -124,8 +128,10 @@ describe('channel classification', () => {
   it('ALL_EVENT_TYPES matches the ChatEvent discriminant set', () => {
     const samples: ChatEvent[] = [
       { type: 'session', sessionId: 's' },
-      { type: 'token', content: 'c' },
-      { type: 'tool_start', tool: 't' },
+      { type: 'delta', text: 'c' },
+      { type: 'tool_call', name: 'chat:ask_choice', input: { prompt: 'p' } },
+      { type: 'tool_result', name: 'chat:ask_choice', ok: true },
+      { type: 'provenance', engine: 'loop', model: 'm' },
       { type: 'card', card: { prompt: 'p', correlationId: 'c', createdAt: 0 } },
       { type: 'card_closed', correlationId: 'c' },
       { type: 'state', version: 1, snapshot: {} },
