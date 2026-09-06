@@ -601,6 +601,8 @@ export interface ChatTurnToolCall {
   /** Picks array — length 1 for single-select cards, ≥1 for multi. */
   answered?: {
     picks: Array<{ option_id: string; label: string }>;
+    /** The user dismissed the card instead of choosing an option. */
+    declined?: boolean;
     /** epoch ms */
     at: number;
   };
@@ -647,6 +649,12 @@ export interface ChatTurn {
   provenance?: ChatTurnProvenance | null;
   error?: boolean;
   workRefs?: WorkRefHint[];
+  /**
+   * Plan context for P-NNN references in this turn. A plan-item id is only
+   * meaningful inside its plan, so a renderer must not guess this value from
+   * whichever plan the surrounding page happens to show.
+   */
+  planSlug?: string | null;
 }
 
 /** One page of history, oldest first within the page. */
