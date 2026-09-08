@@ -11,7 +11,7 @@
  * zod, or postgres.
  */
 
-export { SayStreamProjector, projectSayText } from './say-stream';
+export { SayStreamProjector, projectSayText } from './say-stream.js';
 
 /** Tool-call history may retain the original JSON-string representation.
  * Decode the array here; consumers still validate the option fields they use. */
