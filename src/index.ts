@@ -11,6 +11,21 @@
  * zod, or postgres.
  */
 
+export { SayStreamProjector, projectSayText } from './say-stream';
+
+/** Tool-call history may retain the original JSON-string representation.
+ * Decode the array here; consumers still validate the option fields they use. */
+export function decodeCardOptions(value: unknown): unknown[] | null {
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return Array.isArray(value) ? value : null;
+}
+
 // ---------------------------------------------------------------------------
 // Interactive cards — the model pauses mid-turn, asks the user, resumes.
 // (Generalized from papercusp's CardSpec/CardResponse/OpenCardSnapshot.)
