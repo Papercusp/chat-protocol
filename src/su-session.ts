@@ -47,12 +47,34 @@ export const SU_SESSION_EVENT_TYPES = [
 ] as const;
 export type SuSessionEventType = (typeof SU_SESSION_EVENT_TYPES)[number];
 
+/**
+ * Capability keys every backend must declare. Because `SuSessionCapabilities`
+ * types `features` as a TOTAL record over this union, adding a key here is a
+ * compile error in every adapter until it declares the key truthfully — which
+ * is the mechanism that keeps the published table honest rather than optimistic.
+ *
+ * Semantics, so an engine attests to the same question the PUI asks:
+ * - `tool-events`       tool calls/results surface as structured events.
+ * - `interactive-cards` typed owner-input cards reach the PUI.
+ * - `reasoning-stream`  assistant reasoning is streamed on the `reasoning` channel.
+ * - `usage`             token/cost metadata reaches the client.
+ * - `compaction`        the session survives a context compaction / carry.
+ * - `approvals`         a tool-permission request is put to the OWNER and their
+ *                       decision governs the call — not silently auto-approved.
+ * - `context`           the client can read context consumption/headroom for the
+ *                       session (what a PUI context gauge would render).
+ * - `modes`             the session's operating modes are reported to the client
+ *                       and can be changed through this contract.
+ */
 export const SU_SESSION_FEATURES = [
   "tool-events",
   "interactive-cards",
   "reasoning-stream",
   "usage",
   "compaction",
+  "approvals",
+  "context",
+  "modes",
 ] as const;
 export type SuSessionFeature = (typeof SU_SESSION_FEATURES)[number];
 
