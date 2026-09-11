@@ -56,6 +56,20 @@ const capabilities = {
     "reasoning-stream": supported,
     usage: supported,
     compaction: supported,
+    approvals: {
+      state: "conditional",
+      implementation: "native",
+      reason: "owner approval prompts require the opt-in launch path",
+    },
+    context: {
+      state: "unsupported",
+      reason: "the v1 contract carries no context event or descriptor field",
+    },
+    modes: {
+      state: "conditional",
+      implementation: "host",
+      reason: "modes are reported but this contract has no mode-change command",
+    },
   },
 } satisfies SuSessionCapabilities;
 
