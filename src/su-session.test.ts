@@ -355,6 +355,12 @@ describe("SU-session wire contract", () => {
       "reasoning-stream",
       "usage",
       "compaction",
+      // P-006 requires every advertised backend to declare these three, so the
+      // PUI can state truthfully whether the owner is asked to approve tools,
+      // whether context consumption is readable, and whether modes are live.
+      "approvals",
+      "context",
+      "modes",
     ]);
   });
 
