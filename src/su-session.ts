@@ -151,6 +151,8 @@ export type SuSessionDescriptor<B extends SuSessionBackend = SuSessionBackend> =
         runtimeGeneration: number;
         role: "su";
         model: string | null;
+        /** The account that actually served the latest completed native turn. */
+        accountServed: string | null;
         accountRoute: string | null;
         carry: "warm" | "cold";
         modes: readonly string[];
