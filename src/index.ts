@@ -86,6 +86,12 @@ export interface CardSpec {
   presentation?: CardPresentation;
   /** Plain-text rendering for voice / no-UI clients. */
   fallbackText?: string;
+  /**
+   * Supporting detail a renderer shows only behind its details toggle, never
+   * by default — e.g. a tool approval's raw arguments under its readable
+   * prompt. Optional; a renderer without a toggle may ignore it.
+   */
+  details?: string;
   /** Allow the user to dismiss without answering. */
   allowDecline?: boolean;
   /** Auto-cancel after this many ms (server resolves as `cancel`). */
