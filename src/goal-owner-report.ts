@@ -42,6 +42,7 @@ export interface GoalOwnerReportRefV1 {
 }
 
 const text = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
+const identity = (v: unknown): v is string => text(v) && v === v.trim();
 const texts = (v: unknown): v is string[] => Array.isArray(v) && v.every(text);
 const utc = (v: unknown): v is string => text(v) &&
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(v) &&
@@ -62,7 +63,7 @@ export function parseGoalOwnerReportSnapshot(value: unknown): GoalOwnerReportSna
   if (!object(value, ['schemaVersion', 'workspaceId', 'goalId', 'observedAt', 'sources', 'moved',
     'cost', 'ownerWalls', 'coverage', 'killed', 'nextWake'])) return null;
   const s = value;
-  if (s.schemaVersion !== 1 || !text(s.workspaceId) || !text(s.goalId) || !utc(s.observedAt)) return null;
+  if (s.schemaVersion !== 1 || !identity(s.workspaceId) || !identity(s.goalId) || !utc(s.observedAt)) return null;
   if (!rows(s.sources, (r) => object(r, ['ref', 'revision', 'observedAt', 'measuredAt', 'availability', 'unknownReason']) &&
     text(r.ref) && text(r.revision) && utc(r.observedAt) && nullableUtc(r.measuredAt) &&
     (r.availability === 'value' || r.availability === 'unknown') && optionalText(r.unknownReason) &&
@@ -96,7 +97,7 @@ export function parseGoalOwnerReportSnapshot(value: unknown): GoalOwnerReportSna
 
 export function parseGoalOwnerReportRef(value: unknown): GoalOwnerReportRefV1 | null {
   if (!object(value, ['schemaVersion', 'goalId', 'reportId', 'bodySha256']) ||
-    value.schemaVersion !== 1 || !text(value.goalId) || !text(value.reportId) ||
+    value.schemaVersion !== 1 || !identity(value.goalId) || !identity(value.reportId) ||
     typeof value.bodySha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.bodySha256)) return null;
   return value as unknown as GoalOwnerReportRefV1;
 }
