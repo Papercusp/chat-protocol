@@ -12,6 +12,8 @@
  */
 
 export { SayStreamProjector, projectSayText } from './say-stream.js';
+import { parseGoalOwnerReportRef, type GoalOwnerReportRefV1 } from './goal-owner-report.js';
+export * from './goal-owner-report.js';
 
 /** Tool-call history may retain the original JSON-string representation.
  * Decode the array here; consumers still validate the option fields they use. */
@@ -160,8 +162,9 @@ export interface ReportPlan {
 export interface ReportBlock {
   /** Optional overall heading for the block. */
   title?: string;
-  /** The plan blocks (≥1 — a block with no valid plan is dropped to null). */
+  /** Plan blocks; may be empty when an exact GOAL report reference is present. */
   plans: ReportPlan[];
+  goalReport?: GoalOwnerReportRefV1;
 }
 
 /** Trim + drop empties: a non-blank string, or undefined. */
@@ -183,11 +186,15 @@ function reportStr(v: unknown): string | undefined {
  */
 export function parseReportBlock(value: unknown): ReportBlock | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const goalValue = (value as Record<string, unknown>).goalReport;
+  const goalReport = goalValue === undefined ? undefined : parseGoalOwnerReportRef(goalValue);
+  if (goalValue !== undefined && !goalReport) return null;
   const rawPlans = (value as { plans?: unknown }).plans;
-  if (!Array.isArray(rawPlans)) return null;
+  if (rawPlans !== undefined && !Array.isArray(rawPlans)) return null;
+  if (rawPlans === undefined && !goalReport) return null;
 
   const plans: ReportPlan[] = [];
-  for (const p of rawPlans) {
+  for (const p of (rawPlans ?? []) as unknown[]) {
     if (!p || typeof p !== 'object') continue;
     const rec = p as Record<string, unknown>;
     const slug = reportStr(rec.slug);
@@ -215,8 +222,9 @@ export function parseReportBlock(value: unknown): ReportBlock | null {
     });
   }
 
-  if (plans.length === 0) return null;
+  if (plans.length === 0 && !goalReport) return null;
   const out: ReportBlock = { plans };
+  if (goalReport) out.goalReport = goalReport;
   const topTitle = reportStr((value as Record<string, unknown>).title);
   if (topTitle) out.title = topTitle;
   return out;

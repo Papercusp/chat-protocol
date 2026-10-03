@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { parseReportBlock, type ReportBlock } from './index';
 
 describe('parseReportBlock', () => {
+  it('preserves an exact reference-only GOAL report without fabricated plan rows', () => {
+    const goalReport = { schemaVersion: 1 as const, goalId: 'goal-1', reportId: 'rpt_original', bodySha256: 'a'.repeat(64) };
+    expect(parseReportBlock({ title: 'GOAL snapshot', goalReport })).toEqual({ title: 'GOAL snapshot', plans: [], goalReport });
+    expect(parseReportBlock({ plans: [], goalReport })).toEqual({ plans: [], goalReport });
+    expect(parseReportBlock({ plans: [], goalReport: { ...goalReport, bodySha256: 'latest' } })).toBeNull();
+    expect(parseReportBlock({ plans: [{ title: 'inline' }], goalReport: { ...goalReport, workspaceId: 'caller-selected' } })).toBeNull();
+  });
   it('parses a full block: title, plans, items, statuses', () => {
     const block = parseReportBlock({
       title: 'Fleet status',
