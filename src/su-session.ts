@@ -170,6 +170,24 @@ export interface SuSessionUsage {
   costUsd?: number;
 }
 
+/**
+ * One model the ENGINE reports it can run (WI-10006652): Claude's SDK
+ * initialization catalog, Codex's `model/list`. This is what a chat user picks
+ * from, not the workspace's fleet routing tiers. `id` is the value an
+ * owner_turn `model` spec names (`id[:effort]`).
+ */
+export interface SuSessionModelOption {
+  id: string;
+  label: string;
+  description?: string;
+  /** The canonical model an alias `id` resolves to (Claude `sonnet` → `claude-sonnet-5`). */
+  resolvedModel?: string;
+  efforts?: readonly string[];
+  defaultEffort?: string;
+  /** The engine's own default pick. */
+  isDefault?: boolean;
+}
+
 export const SU_PLAN_ITEM_STATUSES = ["pending", "in_progress", "completed"] as const;
 export type SuPlanItemStatus = (typeof SU_PLAN_ITEM_STATUSES)[number];
 
@@ -205,6 +223,12 @@ export type SuSessionDescriptor<B extends SuSessionBackend = SuSessionBackend> =
          * whole list. Omitted by an engine that has no plan tool.
          */
         plan?: readonly SuPlanItem[];
+        /**
+         * WI-10006652: the models this engine can switch to, as the engine
+         * itself reports them. Omitted until the engine has answered; a client
+         * then falls back to its own menu.
+         */
+        models?: readonly SuSessionModelOption[];
         /** The account that actually served the latest completed native turn. */
         accountServed: string | null;
         accountRoute: string | null;
