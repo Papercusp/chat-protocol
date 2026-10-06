@@ -77,6 +77,14 @@ export interface CardPresentation {
   voiceAnswerable?: boolean;
 }
 
+/** A tool-approval card's parts: the call's row title (e.g. `Update(calc.js)`),
+ * the question asked about it, and the change itself, shown once. */
+export interface CardApproval {
+  title: string;
+  question: string;
+  body: string[];
+}
+
 /** What the model asks for via `ask_choice` / `present_card`. */
 export interface CardSpec {
   prompt: string;
@@ -94,6 +102,12 @@ export interface CardSpec {
    * prompt. Optional; a renderer without a toggle may ignore it.
    */
   details?: string;
+  /**
+   * Present on a tool-approval card: its parts, so a renderer can draw a
+   * coding CLI's approval block (title row, the change once, the question).
+   * `prompt` still carries the same text for renderers that ignore this.
+   */
+  approval?: CardApproval;
   /** Allow the user to dismiss without answering. */
   allowDecline?: boolean;
   /** Auto-cancel after this many ms (server resolves as `cancel`). */
