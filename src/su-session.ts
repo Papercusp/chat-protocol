@@ -177,6 +177,13 @@ export type SuSessionCommandFor<B extends SuSessionBackend> =
   | (SuSessionCommandBase<B, "owner_turn"> & {
       turnId: string;
       content: string;
+      /**
+       * The model this turn and later ones run on, as a `model[:effort]`
+       * spec. Omitted keeps the current model. The engine applies it before
+       * the turn, so a refused switch refuses the turn rather than running
+       * it on a model the owner did not pick.
+       */
+      model?: string;
     })
   | (SuSessionCommandBase<B, "interrupt"> & {
       reason?: string;
