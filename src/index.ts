@@ -12,6 +12,7 @@
  */
 
 export { SayStreamProjector, projectSayText } from './say-stream.js';
+export * from './voice-brain-tool.js';
 import { parseGoalOwnerReportRef, type GoalOwnerReportRefV1 } from './goal-owner-report.js';
 export * from './goal-owner-report.js';
 
