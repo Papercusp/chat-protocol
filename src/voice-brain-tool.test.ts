@@ -53,7 +53,11 @@ describe('answerVoiceQuestion', () => {
     }, { ...clock, timeoutMs: 1234 });
     expect(clock.ms).toBe(1234);
     clock.fire();
-    await expect(pending).resolves.toEqual({ say: VOICE_BRAIN_TIMEOUT_LINE, outcome: 'timeout' });
+    const spoken = await pending;
+    expect(spoken).toEqual({ say: VOICE_BRAIN_TIMEOUT_LINE, outcome: 'timeout' });
+    // Independent oracle: the contract is a SPOKEN failure message, so the line must be
+    // real speech about the delay, not merely whatever the exported constant holds.
+    expect(spoken.say).toMatch(/taking longer than usual/i);
     expect(seenSignal!.aborted).toBe(true);
   });
 
