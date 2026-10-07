@@ -305,6 +305,8 @@ export interface SuSessionRefusal {
   code: string;
   message: string;
   retryable: boolean;
+  /** An actionable condition for a new command; retrying this command id replays the refusal. */
+  liftsWhen?: string;
 }
 
 export type SuSessionCommandResultEvent<B extends SuSessionBackend> =
