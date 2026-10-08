@@ -206,6 +206,10 @@ export type SuSessionDescriptor<B extends SuSessionBackend = SuSessionBackend> =
         runtimeGeneration: number;
         role: "su";
         model: string | null;
+        /** The latest model spec explicitly selected by the owner via /model.
+         * Native engines may report only a resolved model id; keep the owner's
+         * full spec (including effort) across process restart separately. */
+        ownerSelectedModel?: string | null;
         /**
          * The approvals mode the engine runs in now (plan D-026). Omitted by an
          * engine that has no switchable mode (OMP always asks).
