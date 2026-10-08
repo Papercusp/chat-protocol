@@ -48,6 +48,16 @@ describe('parseChatEvent — the measured wire', () => {
     expect(parseChatEvent('provenance', { engine: 'loop' })).toBeNull();
   });
 
+  it('preserves selected tool evidence and rejects malformed provenance', () => {
+    const toolContext = { toolNames: ['docs:search', 'docs:get'], authorization: 'granted', promptHash: 'a'.repeat(32) };
+    const frame = { engine: 'codex', model: 'luna:low', toolContext };
+    expect(parseChatEvent('provenance', frame)).toEqual({ type: 'provenance', ...frame });
+    for (const invalid of [null, { ...toolContext, toolNames: [42] }, { ...toolContext, promptHash: 'unknown' },
+      { ...toolContext, authorization: 'assumed' }]) {
+      expect(parseChatEvent('provenance', { ...frame, toolContext: invalid })).toBeNull();
+    }
+  });
+
   it('parses done with the agent-chats usage shape and converse’s bare done', () => {
     expect(
       parseChatEvent('done', {

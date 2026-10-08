@@ -452,7 +452,7 @@ export type ChatEvent =
    * from today's picker selection. `engine` is the runner (`loop`, `claude-code`,
    * `codex`, `omp`, …), `model` the resolved model spec.
    */
-  | { type: 'provenance'; engine: string; model: string; accountRoute?: string | null }
+  | { type: 'provenance'; engine: string; model: string; accountRoute?: string | null; toolContext?: ChatToolContext }
   | { type: 'card'; card: OpenCardSnapshot }
   | { type: 'card_closed'; correlationId: string }
   | { type: 'state'; version: number; snapshot: unknown }
@@ -572,11 +572,23 @@ export function parseChatEvent(eventName: string, data: unknown): ChatEvent | nu
       const model = str('model');
       if (engine === null || model === null) return null;
       const accountRoute = str('accountRoute');
+      let toolContext: ChatToolContext | undefined;
+      if (obj.toolContext !== undefined) {
+        const value = obj.toolContext;
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+        const context = value as Record<string, unknown>;
+        if (!Array.isArray(context.toolNames) || !context.toolNames.every((name) => typeof name === 'string' && name.length > 0)
+          || typeof context.promptHash !== 'string' || !/^[a-f0-9]{32}$/.test(context.promptHash)
+          || (context.authorization !== 'granted' && context.authorization !== 'unavailable')) return null;
+        toolContext = { toolNames: [...context.toolNames] as string[], promptHash: context.promptHash,
+          authorization: context.authorization };
+      }
       return {
         type: 'provenance',
         engine,
         model,
         ...(accountRoute !== null ? { accountRoute } : obj.accountRoute === null ? { accountRoute: null } : {}),
+        ...(toolContext ? { toolContext } : {}),
       };
     }
     case 'card': {
@@ -668,10 +680,18 @@ export interface WorkRefHint {
 }
 
 /** The `provenance` frame's payload as persisted with a turn. */
+export interface ChatToolContext {
+  /** The exact callable catalog, never credentials, capabilities or private prompt text. */
+  toolNames: string[];
+  promptHash: string;
+  authorization: 'granted' | 'unavailable';
+}
+
 export interface ChatTurnProvenance {
   engine: string;
   model: string;
   accountRoute?: string | null;
+  toolContext?: ChatToolContext;
 }
 
 /**
