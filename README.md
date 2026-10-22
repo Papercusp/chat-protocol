@@ -23,3 +23,34 @@ evolve its own surface as long as it stays compatible with this contract.
 
 Submodule under `github.com/Papercusp/`. Generalized from Papercusp's
 original `CardSpec` / `CardResponse` / `OpenCardSnapshot` shapes.
+
+## Versioned adoption
+
+`ChatEventEnvelope` and `ChatStateV1` use `schemaVersion: 1`. Envelopes require
+host-allocated conversation, turn and event IDs plus a positive per-turn sequence;
+tool events require a stable call ID. Parsing validates the contract, while the
+host store owns authorization, cursor ordering, retention and atomic mutations.
+No parser starts a turn, allocates identity, dispatches a tool or grants access.
+
+`negotiateChatVersion` accepts exactly explicit versions 0 and 1. Missing, future
+or invalid versions fail with `unsupported-version`. Unversioned existing wire
+frames are **legacy0**, consumed only by the explicitly selected
+`decodeLegacyChatFrame` / `upgradeLegacyChatFrame` host adapter. Scout's measured
+`token/content` and `tool_start/tool` vocabulary maps to `delta/text` and
+`tool_call/name`; Papercup retains its existing vocabulary. A legacy tool event
+without call identity requires the host's stable mapping. Unknown result status
+is refused rather than fabricated. New features without a legacy representation
+return `unsupported-event` from `encodeLegacyChatFrame`; the host must choose a
+deliberate fallback. Existing `parseChatEvent` behavior is unchanged.
+
+V1 normalizes lifecycle (including cancelled, interrupted and needs-reconciliation),
+errors with explicit retry permission, provider provenance, grounded result blocks
+and recovery capabilities. Result sources are opaque references; hosts authorize
+their resolution and render strings through their safe components. These types
+do not make model output executable. Capability declarations independently name
+connection replay, persisted history, persisted decisions, completed-tool
+checkpoints and interrupted-turn recovery. `requireChatCapabilities` refuses an
+unsupported request; persisted history never implies restart recovery.
+
+This is the wire/state contract. Durable production stores, compatibility of
+specific shipped artifacts and host adoption need their own behavioral evidence.
