@@ -85,7 +85,8 @@ const invalid = (): ChatProtocolResult<never> => ({ ok: false, code: 'invalid-fr
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 const id = (value: unknown): value is string =>
-  typeof value === 'string' && value.length > 0 && value.length <= 512 && value.trim() === value;
+  typeof value === 'string' && value.length > 0 && value.length <= 512 && value.trim() === value
+    && !/[\u0000-\u001f\u007f]/.test(value);
 const counter = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 
@@ -113,7 +114,7 @@ export function requireChatCapabilities(
 
 function parseResultBlock(value: unknown): ChatResultBlock | null {
   if (!object(value) || !id(value.id) || !id(value.title)
-    || !['entity', 'document', 'report', 'task', 'suggestion'].includes(String(value.kind))
+    || typeof value.kind !== 'string' || !['entity', 'document', 'report', 'task', 'suggestion'].includes(value.kind)
     || (value.text !== undefined && typeof value.text !== 'string')
     || !Array.isArray(value.sources) || value.sources.length === 0 || value.sources.length > 100) return null;
   const sources: ChatResultBlock['sources'] = [];
@@ -156,6 +157,10 @@ export function parseChatEventV1(value: unknown): ChatEventV1 | null {
     case 'session':
       if (!id(value.sessionId)) return null;
       break;
+    case 'provenance':
+      if (!id(value.engine) || !id(value.model) || (value.accountRoute !== undefined
+        && value.accountRoute !== null && typeof value.accountRoute !== 'string')) return null;
+      break;
     case 'card':
       if (!object(value.card) || !id(value.card.correlationId) || !counter(value.card.createdAt)) return null;
       break;
@@ -173,8 +178,16 @@ export function parseChatEventV1(value: unknown): ChatEventV1 | null {
     if (!id(parsed.name) || (value.summary !== undefined && typeof value.summary !== 'string')) return null;
   }
   if (parsed.type === 'done' && value.usage !== undefined) {
-    if (!object(value.usage) || Object.values(value.usage).some((n) =>
-      typeof n !== 'number' || !Number.isFinite(n) || n < 0)) return null;
+    if (!object(value.usage)) return null;
+    const usage: NonNullable<Extract<ChatEventV1, { type: 'done' }>['usage']> = {};
+    for (const key of ['totalTokens', 'inputTokens', 'outputTokens', 'costUsd'] as const) {
+      const n = value.usage[key];
+      if (n === undefined) continue;
+      if (typeof n !== 'number' || !Number.isFinite(n) || n < 0
+        || (key !== 'costUsd' && !Number.isSafeInteger(n))) return null;
+      usage[key] = n;
+    }
+    parsed.usage = usage;
   }
   if (parsed.type === 'done' && value.stopReason !== undefined && typeof value.stopReason !== 'string') return null;
   return parsed as ChatEventV1;

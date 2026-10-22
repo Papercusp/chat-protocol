@@ -45,7 +45,7 @@ describe('version 1 contract boundary', () => {
 
   it('rejects missing/blank identity, unsafe cursors and malformed events', () => {
     for (const field of ['conversationId', 'turnId', 'eventId']) {
-      for (const value of ['', ' x', 42, undefined, 'x'.repeat(513)]) {
+      for (const value of ['', ' x', 42, undefined, 'x'.repeat(513), 'one\ntwo', 'one\u0000two', 'one\u007ftwo']) {
         expect(parseChatEnvelope({ ...text, [field]: value })).toEqual({ ok: false, code: 'invalid-frame' });
       }
     }
@@ -87,12 +87,17 @@ describe('version 1 contract boundary', () => {
     const event = { type: 'provenance' as const, engine: 'native', model: 'selected-model', accountRoute: null };
     expect(parseChatEventV1(event)).toEqual(event);
     expect(parseChatEventV1({ type: 'provenance', model: 'selected-model' })).toBeNull();
-    for (const usage of [{ costUsd: -1 }, { inputTokens: NaN }, { totalTokens: '2' }, []]) {
+    expect(parseChatEventV1({ ...event, engine: '' })).toBeNull();
+    expect(parseChatEventV1({ ...event, accountRoute: 42 })).toBeNull();
+    for (const usage of [{ costUsd: -1 }, { inputTokens: NaN }, { totalTokens: '2' },
+      { inputTokens: 1.5 }, { outputTokens: Number.MAX_SAFE_INTEGER + 1 }, []]) {
       expect(parseChatEventV1({ type: 'done', usage })).toBeNull();
     }
     expect(parseChatEventV1({ type: 'done', stopReason: 7 })).toBeNull();
     expect(parseChatEventV1({ type: 'done', usage: { inputTokens: 0, outputTokens: 2 } }))
       .toEqual({ type: 'done', usage: { inputTokens: 0, outputTokens: 2 } });
+    expect(parseChatEventV1({ type: 'done', usage: { costUsd: 0.001, privateField: 'untrusted' } }))
+      .toEqual({ type: 'done', usage: { costUsd: 0.001 } });
     expect(parseChatEventV1({ type: 'state', version: NaN, snapshot: {} })).toBeNull();
     expect(parseChatEventV1({ type: 'state', version: 1 })).toBeNull();
     expect(parseChatEventV1({ type: 'card', card: { correlationId: 'card-1', prompt: 'p', createdAt: -1 } })).toBeNull();
