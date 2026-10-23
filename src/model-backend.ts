@@ -180,8 +180,10 @@ export async function* runModelBackend<TInput>(backend: ModelBackend<TInput>, in
           if (frame.event.type === 'error') throw new ModelBackendFailure(
             frame.event.code === 'deadline-exceeded' ? 'deadline-exceeded' : 'provider-failure');
           published = true;
-          complete = frame.event.type === 'done';
+          const terminal = frame.event.type === 'done';
           yield { ...observation, type: 'frame', frame };
+          checkAbort(control.signal);
+          complete = terminal;
           if (complete) break;
         }
       } catch (error) { failure = normalizeModelFailure(error); }

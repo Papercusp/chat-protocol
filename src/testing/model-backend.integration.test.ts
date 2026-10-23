@@ -116,6 +116,34 @@ describe('model backend host adapter composition (tree only)', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('terminal-frame backpressure cannot report completion after deadline or caller abort', async () => {
+    vi.useFakeTimers();
+    for (const boundary of [99, 100, 101, 'caller-abort'] as const) {
+      const caller = new AbortController();
+      const close = vi.fn(async () => ({ done: true as const, value: undefined }));
+      const stream = vi.fn(() => ({ [Symbol.asyncIterator]: () => ({
+        next: async () => ({ done: false as const, value: { event: { type: 'done' as const } } }),
+        return: close,
+      }) }));
+      const iterator = runModelBackend(port(stream), {}, { policy, signal: caller.signal });
+      expect((await iterator.next()).value).toMatchObject({ type: 'attempt', outcome: 'started' });
+      expect((await iterator.next()).value).toMatchObject({ type: 'frame', frame: { event: { type: 'done' } } });
+      if (boundary === 'caller-abort') caller.abort();
+      else await vi.advanceTimersByTimeAsync(boundary);
+      if (boundary === 99) {
+        expect((await iterator.next()).value).toMatchObject({ type: 'attempt', outcome: 'completed' });
+        expect((await iterator.next()).done).toBe(true);
+      } else {
+        const failure = boundary === 'caller-abort' ? 'aborted' : 'deadline-exceeded';
+        expect((await iterator.next()).value).toMatchObject({ type: 'attempt', outcome: 'failed', failure });
+        await expect(iterator.next()).rejects.toMatchObject({ code: failure });
+      }
+      expect(stream).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  });
+
   it('consumer return aborts the actual host stream and settles its cleanup', async () => {
     let signal: AbortSignal | undefined;
     const close = vi.fn(async () => ({ done: true as const, value: undefined }));
