@@ -67,6 +67,21 @@ const sameScope = (a: InteractionScope, b: InteractionScope) => scopeKeys.every(
 const validScope = (v: InteractionScope) => object(v) && scopeKeys.every(key => id(v[key]));
 const sameIdentity = (a: InteractionIdentity, b: InteractionIdentity) =>
   a.conversationId === b.conversationId && a.correlationId === b.correlationId;
+/** Durable answers are JSON. Compare their values independently of storage key
+ * order; unsupported/non-JSON shapes cannot prove an uncertain acknowledgement. */
+function sameResponse(a: CardResponse, b: CardResponse): boolean {
+  const canonical = (value: unknown): unknown => {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean'
+      || (typeof value === 'number' && Number.isFinite(value))) return value;
+    if (Array.isArray(value)) return value.map(canonical);
+    if (object(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+      return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+    }
+    throw new Error('non-json-response');
+  };
+  try { return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b)); }
+  catch { return false; }
+}
 function response(input: unknown, correlationId: string): CardResponse | null {
   if (!object(input) || input.correlationId !== correlationId) return null;
   const keys = input.action === 'submit' ? ['action', 'correlationId', 'value'] : ['action', 'correlationId'];
@@ -157,7 +172,10 @@ export class InteractionResolver {
       const recovered = await this.read(bound, principal);
       if (recovered.ok && recovered.value.status === 'resolved'
         && recovered.value.decision?.submissionId === answer.submissionId
-        && recovered.value.decision.revision === answer.revision + 1) {
+        && recovered.value.decision.revision === answer.revision + 1
+        && recovered.value.schema.id === candidate.schema.id
+        && recovered.value.schema.revision === candidate.schema.revision
+        && sameResponse(recovered.value.decision.response, accepted)) {
         return { ok: true, value: recovered.value.decision };
       }
       return fail('needs-reconciliation');
