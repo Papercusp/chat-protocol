@@ -22,6 +22,11 @@
       "import": "./src/interaction-resolution.ts",
       "default": "./src/interaction-resolution.ts"
     },
+    "./backend": {
+      "types": "./src/model-backend.ts",
+      "import": "./src/model-backend.ts",
+      "default": "./src/model-backend.ts"
+    },
     "./testing": {
       "types": "./src/testing/conformance.ts",
       "import": "./src/testing/conformance.ts",
