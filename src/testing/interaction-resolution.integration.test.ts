@@ -94,7 +94,7 @@ describe('interaction resolver over existing deterministic card/session seam (tr
     f.adapter.validate = async () => ({ ok: true, value: { selected: 'accept', metadata: { b: 2, a: 1 } } });
     const transact = f.store.transact.bind(f.store);
     f.store.transact = (identity, caller, decide) => transact(identity, caller, current => {
-      const mutation = decide(current);
+      const mutation = structuredClone(decide(current));
       const stored = mutation.next?.decision?.response;
       if (stored?.action === 'submit') stored.value = { metadata: { a: 1, b: 2 }, selected: 'accept' };
       return mutation;
