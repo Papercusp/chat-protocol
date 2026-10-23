@@ -89,3 +89,31 @@ after the requested cursor, using their existing transport buffer or persistence
 Lightweight profiles can advertise connection replay while explicitly refusing
 restart recovery. The deterministic worker/store tests are tree evidence;
 production restart durability still requires each host's persistent adapter tests.
+
+## Scoped interaction resolution
+
+`@papercusp/chat-protocol/interactions` exports `InteractionResolver`. It reuses
+`CardSpec`/`CardResponse` and stores version-1 pending and terminal records in the
+host's existing card/session boundary. Bind conversation, principal, tenant,
+customer and public owner on the backend. Rendered content and submitted fields
+never grant authority. Supply `validate` by looking up the immutable server-owned
+schema id/revision and calling tooldef's `standardValidate`; the package itself
+adds no validator or database dependency.
+
+The store's `transact` implementation must fence current authorization, scope,
+revision, schema, expiry and cancellation together. Invoke its synchronous callback
+once with current state and authority. Persist a returned `next` and its workflow
+transition atomically; a read-only result has no workflow effect. Metadata changes
+must advance the revision. A workflow advance is a stored transition, not an
+untracked network call. External effects still use the turn recovery admission and
+reconciliation contract. Do not implement this seam as a read followed by an
+unconditional update or an in-process lock shared by only one worker.
+
+Schema validation may await outside the transaction; the final transaction
+rechecks the validated revision and schema before committing. Duplicate and late
+answers return typed refusals. An uncertain acknowledgement triggers one read,
+returns the matching stored submission if found, or `needs-reconciliation`.
+It never retries the write or advances a loser. `read` recovers pending or terminal
+state without an advance and rechecks current authority. Deterministic unit and
+integration tests exercise the existing fake database across fresh workers; host
+Postgres adapters must separately prove process restart durability.

@@ -1,4 +1,5 @@
 import { parseChatEnvelope, type CardResponse, type CardSpec, type ChatEventEnvelope } from '../index.js';
+import type { InteractionRecord } from '../interaction-resolution.js';
 
 /** D-011 fixture policy, not an implicit change to either production host's policy. */
 export const FIXTURE_BUDGETS = Object.freeze({
@@ -50,6 +51,7 @@ export function fakeDatabase() {
     completed: new Map<string, CompletedEffect>(), decisions: new Map<string, TerminalDecision>(),
     pending: new Map<string, PendingInteraction>(), effects: [] as CompletedEffect[],
     events: [] as ChatEventEnvelope[],
+    interactions: new Map<string, InteractionRecord>(), interactionAdvances: [] as InteractionRecord[],
   };
 }
 export type FakeDatabase = ReturnType<typeof fakeDatabase>;

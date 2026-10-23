@@ -17,6 +17,11 @@
       "import": "./src/turn-recovery.ts",
       "default": "./src/turn-recovery.ts"
     },
+    "./interactions": {
+      "types": "./src/interaction-resolution.ts",
+      "import": "./src/interaction-resolution.ts",
+      "default": "./src/interaction-resolution.ts"
+    },
     "./testing": {
       "types": "./src/testing/conformance.ts",
       "import": "./src/testing/conformance.ts",
