@@ -65,27 +65,27 @@ describe('interaction resolver over existing deterministic card/session seam (tr
 
   it('ack-loss never acknowledges a competing payload that reused the same submission identity', async () => {
     for (const reuseId of [false, true]) {
-    const f = interactionFixture();
-    const validate = f.adapter.validate;
-    const competing = new InteractionResolver({ ...f.adapter, validate });
-    const transact = f.store.transact.bind(f.store);
-    f.store.transact = async (identity, caller, decide) => {
-      const result = await transact(identity, caller, decide);
-      // The refusal acknowledgement is lost after the other worker committed.
-      if (!result.ok && result.code === 'already-decided') throw new Error('ack-lost');
-      return result;
-    };
-    f.adapter.validate = async (schema, value) => {
-      const valid = await validate(schema, value);
-      const other = interactionAnswer(reuseId ? 'answer-1' : 'other-answer');
-      other.response = { action: 'submit', correlationId: identity.correlationId, value: { selected: 'reject' } };
-      expect((await competing.resolve(identity, scope, other)).ok).toBe(true);
-      return valid;
-    };
-    expect(await f.resolver.resolve(identity, scope, interactionAnswer()))
-      .toEqual({ ok: false, code: 'needs-reconciliation' });
-    expect(f.record().decision?.response).toMatchObject({ value: { selected: 'reject' } });
-    expect(f.advances).toHaveLength(1);
+      const f = interactionFixture();
+      const validate = f.adapter.validate;
+      const competing = new InteractionResolver({ ...f.adapter, validate });
+      const transact = f.store.transact.bind(f.store);
+      f.store.transact = async (identity, caller, decide) => {
+        const result = await transact(identity, caller, decide);
+        // The refusal acknowledgement is lost after the other worker committed.
+        if (!result.ok && result.code === 'already-decided') throw new Error('ack-lost');
+        return result;
+      };
+      f.adapter.validate = async (schema, value) => {
+        const valid = await validate(schema, value);
+        const other = interactionAnswer(reuseId ? 'answer-1' : 'other-answer');
+        other.response = { action: 'submit', correlationId: identity.correlationId, value: { selected: 'reject' } };
+        expect((await competing.resolve(identity, scope, other)).ok).toBe(true);
+        return valid;
+      };
+      expect(await f.resolver.resolve(identity, scope, interactionAnswer()))
+        .toEqual({ ok: false, code: 'needs-reconciliation' });
+      expect(f.record().decision?.response).toMatchObject({ value: { selected: 'reject' } });
+      expect(f.advances).toHaveLength(1);
     }
   });
 
