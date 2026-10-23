@@ -54,3 +54,29 @@ unsupported request; persisted history never implies restart recovery.
 
 This is the wire/state contract. Durable production stores, compatibility of
 specific shipped artifacts and host adoption need their own behavioral evidence.
+
+## Turn recovery
+
+`@papercusp/chat-protocol/recovery` exports `TurnRecovery` and its host adapter
+interfaces. The adapter supplies current caller authorization, the existing
+session store's atomic compare-and-swap, its SSE/event replay window, and an
+abort hook for host-owned execution. A turn starts with host-authorized effect
+identities. Each effect is claimed before dispatch; completed results are reused.
+Dispatch errors and uncertain claim acknowledgements return
+`needs-reconciliation`. Hosts reconcile unknown outcomes through their existing
+effect/idempotency lookup and persist verified results through the same CAS seam;
+model retries never authorize redispatch.
+
+Checkpoint-write failure remains explicit. If a completion committed but its
+acknowledgement was lost, the component reads the stored result before returning.
+Cancellation commits before invoking the host abort hook; an in-flight effect's
+completed result is retained without reopening the cancelled turn. The dispatch
+signal must belong to that host execution so the abort hook reaches it.
+
+Replay windows report their retained lower bound and latest sequence, including
+when empty. The component rejects gaps, reordered/foreign frames, stale cursors
+and cursors beyond the latest event. Hosts return the complete retained suffix
+after the requested cursor, using their existing transport buffer or persistence.
+Lightweight profiles can advertise connection replay while explicitly refusing
+restart recovery. The deterministic worker/store tests are tree evidence;
+production restart durability still requires each host's persistent adapter tests.
