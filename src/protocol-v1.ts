@@ -26,12 +26,20 @@ export const CHAT_ERROR_CODES = [
 export type ChatErrorCode = (typeof CHAT_ERROR_CODES)[number];
 
 /** Opaque refs are resolved and authorized by the host, never by the renderer. */
+export interface ChatSuggestedAction {
+  id: string;
+  label: string;
+  kind: string;
+  ref: string;
+}
 export interface ChatResultBlock {
   id: string;
   kind: 'entity' | 'document' | 'report' | 'task' | 'suggestion';
   title: string;
   text?: string;
   sources: Array<{ ref: string; label?: string }>;
+  /** Presentation-only intents. Activation must go through current host authorization. */
+  actions?: ChatSuggestedAction[];
 }
 
 type CommonEvent = Exclude<ChatEvent, { type: 'tool_call' | 'tool_result' | 'error' }>;
@@ -122,8 +130,21 @@ function parseResultBlock(value: unknown): ChatResultBlock | null {
     if (!object(source) || !id(source.ref) || (source.label !== undefined && typeof source.label !== 'string')) return null;
     sources.push({ ref: source.ref, ...(source.label !== undefined ? { label: source.label } : {}) });
   }
+  let actions: ChatSuggestedAction[] | undefined;
+  if (value.actions !== undefined) {
+    if (!Array.isArray(value.actions) || value.actions.length > 20) return null;
+    actions = [];
+    const seen = new Set<string>();
+    for (const action of value.actions) {
+      if (!object(action) || !id(action.id) || !id(action.label) || !id(action.kind) || !id(action.ref)
+        || seen.has(action.id) || !sources.some(source => source.ref === action.ref)) return null;
+      seen.add(action.id);
+      actions.push({ id: action.id, label: action.label, kind: action.kind, ref: action.ref });
+    }
+  }
   return { id: value.id, kind: value.kind as ChatResultBlock['kind'], title: value.title,
-    ...(value.text !== undefined ? { text: value.text } : {}), sources };
+    ...(value.text !== undefined ? { text: value.text } : {}), sources,
+    ...(actions !== undefined ? { actions } : {}) };
 }
 
 /** Validate untrusted bytes before reducing or persisting. Extra fields do not confer authority. */

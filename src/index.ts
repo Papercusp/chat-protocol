@@ -16,6 +16,7 @@ export * from './voice-brain-tool.js';
 export * from './voice-session-prompt.js';
 export * from './voice-transcript.js';
 export * from './protocol-v1.js';
+export * from './structured-results.js';
 export * from './legacy-chat.js';
 import { parseGoalOwnerReportRef, type GoalOwnerReportRefV1 } from './goal-owner-report.js';
 export * from './goal-owner-report.js';
