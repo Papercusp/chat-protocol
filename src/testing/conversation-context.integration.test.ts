@@ -99,6 +99,10 @@ describe('conversation context host composition (tree only)', () => {
     badStored.set(stored);
     expect(await new ConversationContext(badStored.host).recover(contextScope, contextPolicy))
       .toMatchObject({ ok: false, code: 'invalid-summary' });
+    const badReceipt = contextHost(); const receiptState = badReceipt.get();
+    receiptState.receipts = [null as never]; badReceipt.set(receiptState);
+    await expect(new ConversationContext(badReceipt.host).recover(contextScope, contextPolicy))
+      .resolves.toMatchObject({ ok: false, code: 'invalid-context' });
   });
 
   it('repeated durable compaction is idempotent across restarted adapters', async () => {

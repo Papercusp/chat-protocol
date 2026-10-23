@@ -59,6 +59,10 @@ describe('budgeted conversation context contract', () => {
     const small = [contextRecord('old'), contextRecord('latest', 'question', 'user')];
     const summary: ContextSummary = { scope: contextScope, text: 'summary'.repeat(600), coveredIds: ['old'], operationId: 'prior' };
     expect(selectConversationContext(contextScope, small, contextPolicy, summary)).toMatchObject({ ok: false, code: 'budget-exceeded' });
+    const malformed = { ...summary, coveredIds: 42 } as unknown as ContextSummary;
+    expect(() => selectConversationContext(contextScope, small, contextPolicy, malformed)).not.toThrow();
+    expect(selectConversationContext(contextScope, small, contextPolicy, malformed))
+      .toMatchObject({ ok: false, code: 'invalid-summary' });
   });
 
   it('records successful summary coverage only for its declared source span', async () => {
