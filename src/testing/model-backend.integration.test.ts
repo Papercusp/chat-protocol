@@ -38,7 +38,7 @@ describe('model backend host adapter composition (tree only)', () => {
     expect(stream).toHaveBeenCalledTimes(1);
   });
 
-  it('never restarts after partial output or a tool boundary and preserves already observed usage', async () => {
+  it('never restarts after partial output or a tool boundary', async () => {
     for (const event of [{ type: 'delta', text: 'partial' },
       { type: 'tool_call', name: 'host:effect', callId: 'c1' }]) {
       let effects = 0;
@@ -62,6 +62,33 @@ describe('model backend host adapter composition (tree only)', () => {
     await expect(drain(port(stream, 'effects-possible'))).rejects.toMatchObject({ code: 'unavailable' });
     expect(stream).toHaveBeenCalledTimes(1);
     expect(effects).toBe(1);
+  });
+
+  it('snapshots retry safety and provenance before an adapter can mutate its descriptor', async () => {
+    let effects = 0;
+    const backend = port(async function* (): AsyncGenerator<ModelBackendFrame> {
+      effects++;
+      backend.retrySafety = 'model-only';
+      backend.id = 'replacement';
+      backend.model = 'replacement-model';
+      throw { status: 503 };
+    }, 'effects-possible');
+    const observations: ModelBackendObservation[] = [];
+    await expect(drain(backend, observations)).rejects.toMatchObject({ code: 'unavailable' });
+    expect(effects).toBe(1);
+    expect(observations.every(e => e.backendId === 'existing-host' && e.model === 'existing-model')).toBe(true);
+  });
+
+  it('retains measured failure usage and keeps unreported usage unknown', async () => {
+    for (const usage of [undefined, { inputTokens: 7, outputTokens: 2, costUsd: 0.01 }]) {
+      const observations: ModelBackendObservation[] = [];
+      const backend = port(async function* (): AsyncGenerator<ModelBackendFrame> { throw { status: 401, usage }; });
+      await expect(drain(backend, observations)).rejects.toMatchObject({ code: 'unauthorized' });
+      const receipt = observations.at(-1);
+      expect(receipt).toMatchObject({ type: 'attempt', outcome: 'failed' });
+      if (usage === undefined) expect(receipt).not.toHaveProperty('usage');
+      else expect(receipt).toHaveProperty('usage', usage);
+    }
   });
 
   it('propagates disconnect abort and calls iterator cleanup without buffering future frames', async () => {

@@ -27,6 +27,7 @@ export interface ModelBackend<TInput> {
 export type ModelFailureCode = 'rate-limited' | 'unavailable' | 'provider-failure'
   | 'unauthorized' | 'aborted' | 'deadline-exceeded' | 'invalid-frame'
   | 'unsupported-capability' | 'incomplete-stream';
+export type ModelUsage = NonNullable<Extract<ModelBackendEvent, { type: 'done' }>['usage']>;
 const messages: Record<ModelFailureCode, string> = {
   'rate-limited': 'The model request was rate limited.',
   unavailable: 'The model service is unavailable.',
@@ -39,7 +40,7 @@ const messages: Record<ModelFailureCode, string> = {
   'incomplete-stream': 'The model stream ended without a terminal result.',
 };
 export class ModelBackendFailure extends Error {
-  constructor(readonly code: ModelFailureCode) {
+  constructor(readonly code: ModelFailureCode, readonly usage?: ModelUsage) {
     super(messages[code]);
     this.name = 'ModelBackendFailure';
   }
@@ -59,7 +60,7 @@ export interface RunModelBackendOptions {
 type Observation = { backendId: string; model: string; attempt: number };
 export type ModelBackendObservation = Observation & (
   | { type: 'frame'; frame: ModelBackendFrame }
-  | { type: 'attempt'; outcome: 'started' | 'retrying' | 'completed' | 'failed'; failure?: ModelFailureCode }
+  | { type: 'attempt'; outcome: 'started' | 'retrying' | 'completed' | 'failed'; failure?: ModelFailureCode; usage?: ModelUsage }
 );
 
 /** Normalize structured status/code only. Provider exception text can contain
@@ -68,13 +69,18 @@ export function normalizeModelFailure(error: unknown): ModelBackendFailure {
   if (error instanceof ModelBackendFailure) return error;
   if (error && typeof error === 'object') {
     const e = error as Record<string, unknown>;
+    const parsed = e.usage === undefined ? undefined : parseChatEventV1({ type: 'done', usage: e.usage });
+    if (e.usage !== undefined && (!parsed || parsed.type !== 'done'))
+      return new ModelBackendFailure('invalid-frame');
+    const usage = parsed?.type === 'done' ? parsed.usage : undefined;
     const status = Number(e.status ?? e.statusCode);
-    if (status === 401 || status === 403) return new ModelBackendFailure('unauthorized');
-    if (status === 429) return new ModelBackendFailure('rate-limited');
+    if (status === 401 || status === 403) return new ModelBackendFailure('unauthorized', usage);
+    if (status === 429) return new ModelBackendFailure('rate-limited', usage);
     if (status === 408 || (status >= 500 && status <= 599)
       || ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT'].includes(String(e.code)))
-      return new ModelBackendFailure('unavailable');
-    if (e.name === 'AbortError') return new ModelBackendFailure('aborted');
+      return new ModelBackendFailure('unavailable', usage);
+    if (e.name === 'AbortError') return new ModelBackendFailure('aborted', usage);
+    return new ModelBackendFailure('provider-failure', usage);
   }
   return new ModelBackendFailure('provider-failure');
 }
@@ -100,7 +106,8 @@ function parseFrame(raw: unknown, caps: ModelBackendCapabilities, maxBytes: numb
   } catch { throw new ModelBackendFailure('invalid-frame'); }
   const event = parseChatEventV1(snapshot.event);
   if (!event || !eventTypes.has(event.type)) throw new ModelBackendFailure('invalid-frame');
-  if ((event.type === 'session' && !caps.nativeSession)
+  if ((event.type === 'delta' && !caps.streaming)
+    || (event.type === 'session' && !caps.nativeSession)
     || ((event.type === 'tool_call' || event.type === 'tool_result') && !caps.toolObservations)
     || (Object.hasOwn(snapshot, 'providerState') && !caps.providerState))
     throw new ModelBackendFailure('unsupported-capability');
@@ -140,6 +147,10 @@ export async function* runModelBackend<TInput>(backend: ModelBackend<TInput>, in
     || !['model-only', 'effects-possible'].includes(backend.retrySafety))
     throw new ModelBackendFailure('unsupported-capability');
   const caps = { ...backend.capabilities };
+  const retrySafety = backend.retrySafety;
+  const backendId = backend.id;
+  const model = backend.model;
+  const stream = backend.stream.bind(backend);
   if ((options.requiredCapabilities ?? []).some(key => !capabilityKeys.includes(key) || !caps[key]))
     throw new ModelBackendFailure('unsupported-capability');
   const control = new AbortController();
@@ -150,7 +161,7 @@ export async function* runModelBackend<TInput>(backend: ModelBackend<TInput>, in
   try {
     for (let attempt = 1; attempt <= policy.maxAttempts; attempt++) {
       checkAbort(control.signal);
-      const observation = { backendId: backend.id, model: backend.model, attempt };
+      const observation = { backendId, model, attempt };
       yield { ...observation, type: 'attempt', outcome: 'started' };
       const child = new AbortController();
       const cancelChild = () => child.abort(control.signal.reason);
@@ -161,7 +172,7 @@ export async function* runModelBackend<TInput>(backend: ModelBackend<TInput>, in
       let complete = false;
       try {
         checkAbort(control.signal);
-        iterator = backend.stream(input, { signal: child.signal, attempt })[Symbol.asyncIterator]();
+        iterator = stream(input, { signal: child.signal, attempt })[Symbol.asyncIterator]();
         while (true) {
           const step = await bounded(() => iterator!.next(), control.signal);
           if (step.done) throw new ModelBackendFailure('incomplete-stream');
@@ -182,9 +193,10 @@ export async function* runModelBackend<TInput>(backend: ModelBackend<TInput>, in
       }
       if (complete) { yield { ...observation, type: 'attempt', outcome: 'completed' }; return; }
       failure ??= new ModelBackendFailure('provider-failure');
-      const retry = backend.retrySafety === 'model-only' && !published && attempt < policy.maxAttempts
+      const retry = retrySafety === 'model-only' && !published && attempt < policy.maxAttempts
         && ['rate-limited', 'unavailable'].includes(failure.code) && !control.signal.aborted;
-      yield { ...observation, type: 'attempt', outcome: retry ? 'retrying' : 'failed', failure: failure.code };
+      yield { ...observation, type: 'attempt', outcome: retry ? 'retrying' : 'failed', failure: failure.code,
+        ...(failure.usage === undefined ? {} : { usage: { ...failure.usage } }) };
       if (!retry) throw failure;
       await backoff(policy.backoffMs, control.signal);
     }
