@@ -66,9 +66,27 @@ describe('conversation context host composition (tree only)', () => {
     f.providerJournal.set('fold', remembered);
     f.trace.length = 0;
     expect(await new ConversationContext(f.host).recover(contextScope, contextPolicy))
+      .toMatchObject({ ok: false, code: 'needs-reconciliation', receipts: [{ usage: remembered.usage }] });
+    expect(f.trace).toEqual(['reconcile', 'usage']);
+    expect(f.host.compareAndSwap).toHaveBeenCalledTimes(before);
+    expect(f.get().summary).toBeNull();
+    expect(f.host.summarize).toHaveBeenCalledTimes(1);
+    expect(f.usageJournal.size).toBe(1);
+    expect(f.get().receipts).toHaveLength(0);
+    // The host may reconcile its existing durable checkpoint from evidence beyond the provider
+    // journal. Recovery reads that outcome; it does not manufacture the coverage decision.
+    f.host.reconcile.mockImplementation(async () => {
+      const next = f.get();
+      next.revision++;
+      next.summary = { scope: contextScope, operationId: 'fold', text: remembered.text!,
+        coveredIds: [...remembered.coveredIds!] };
+      next.operation!.phase = 'completed';
+      next.receipts = [f.usageJournal.get('fold')!];
+      await cas(contextScope, next.revision - 1, next, {});
+      return remembered;
+    });
+    expect(await new ConversationContext(f.host).recover(contextScope, contextPolicy))
       .toMatchObject({ ok: true, value: { outcome: 'recovered' } });
-    expect(f.trace[0]).toBe('reconcile');
-    expect(f.trace.at(-1)).toBe('cas:completed');
     expect(f.host.summarize).toHaveBeenCalledTimes(1);
     expect(f.usageJournal.size).toBe(1);
     expect(f.get().receipts).toHaveLength(1);
@@ -131,6 +149,59 @@ describe('conversation context host composition (tree only)', () => {
         const recovered = await new ConversationContext(f.host).recover(contextScope, contextPolicy);
         expect(recovered).toMatchObject(cancelled ? { ok: false, code: 'cancelled' } : { ok: true });
         expect(f.get().summary?.coveredIds ?? []).toEqual(cancelled ? [] : ['old-a', 'old-b']);
+      }
+    }
+  });
+
+  it('does not resurrect aborted coverage after storage failures or a lost commit acknowledgement', async () => {
+    for (const boundary of ['read-error', 'precommit-error', 'committed-ack-loss'] as const) {
+      for (const measured of [true, false]) {
+        const f = contextHost();
+        const controller = new AbortController();
+        const summarize = f.host.summarize.getMockImplementation()!;
+        f.host.summarize.mockImplementation(async input => {
+          const attempt = await summarize(input);
+          if (!measured) delete attempt.usage;
+          f.providerJournal.set(input.operationId, structuredClone(attempt));
+          return attempt;
+        });
+        const observe = f.host.observeUsage.getMockImplementation()!;
+        f.host.observeUsage.mockImplementation(async (...args) => {
+          await observe(...args);
+          if (boundary === 'read-error') controller.abort();
+        });
+        const read = f.host.read.getMockImplementation()!;
+        let readFailed = false;
+        f.host.read.mockImplementation(async () => {
+          if (boundary === 'read-error' && f.usageJournal.has('fold') && !readFailed) {
+            readFailed = true;
+            throw new Error('settlement storage read failed');
+          }
+          return read();
+        });
+        const cas = f.host.compareAndSwap.getMockImplementation()!;
+        let writeFailed = false;
+        f.host.compareAndSwap.mockImplementation(async (...args) => {
+          if (args[2].summary && !writeFailed && boundary !== 'read-error') {
+            writeFailed = true;
+            if (boundary === 'committed-ack-loss') await cas(...args);
+            queueMicrotask(() => controller.abort());
+            throw new Error('storage write acknowledgement lost');
+          }
+          return cas(...args);
+        });
+        const compacted = await new ConversationContext(f.host).compact(contextScope, 'fold', contextPolicy, controller.signal);
+        expect(compacted).toMatchObject({ ok: false });
+        const committed = boundary === 'committed-ack-loss';
+        const recovered = await new ConversationContext(f.host).recover(contextScope, contextPolicy);
+        expect(recovered, `${boundary}/${measured}`).toMatchObject(committed
+          ? { ok: true, value: { outcome: 'recovered' } }
+          : { ok: false, code: 'needs-reconciliation' });
+        expect(f.get().summary?.coveredIds ?? []).toEqual(committed ? ['old-a', 'old-b'] : []);
+        expect(f.usageJournal.get('fold')?.usage).toEqual(measured
+          ? { inputTokens: 17, outputTokens: 3, costUsd: 0.001 } : null);
+        expect(f.usageJournal.size).toBe(1);
+        expect(f.host.summarize).toHaveBeenCalledTimes(1);
       }
     }
   });

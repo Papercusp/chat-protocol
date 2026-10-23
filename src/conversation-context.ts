@@ -88,8 +88,10 @@ export interface ContextHost {
   /** Existing liability/usage journal; MUST be idempotent by scoped operationId.
    * Capture even failed/incomplete attempts before the context CAS. */
   observeUsage(scope: ContextScope, receipt: HousekeepingReceipt): Promise<void>;
-  /** Read/reconcile the existing provider journal. Never launch another summary here.
-   * Null means the outcome remains unknown, so replay is refused. */
+  /** Reconcile the existing provider journal and context checkpoint; never launch another summary.
+   * A provider result establishes usage, not whether coverage committed or cancellation won.
+   * The host must settle its existing checkpoint from durable evidence before recovery can admit it.
+   * Null means provider usage is still unknown. An unsettled checkpoint always refuses replay. */
   reconcile?(scope: ContextScope, operationId: string): Promise<SummaryAttempt | null>;
 }
 export interface ContextOutcome {
@@ -206,6 +208,12 @@ function measuredUsage(value: unknown): Usage | null {
     ? { ...parsed.usage } : null;
 }
 
+function housekeepingReceipt(operationId: string, attempt: SummaryAttempt): HousekeepingReceipt {
+  return { operationId,
+    status: ['completed', 'failed', 'incomplete'].includes(attempt?.status) ? attempt.status : 'failed',
+    usage: measuredUsage(attempt?.usage) };
+}
+
 /** Coordinates host hooks only. Credentials, tools, provider budgets and storage remain host-owned. */
 export class ConversationContext {
   private readonly profile: ContextHost['profile'];
@@ -294,15 +302,28 @@ export class ConversationContext {
     let attempt: SummaryAttempt | null;
     try { attempt = await this.host.reconcile?.(scope, s.operation.id) ?? null; }
     catch { return fail('needs-reconciliation'); }
-    return attempt ? this.settle(s, attempt, policy, true) : fail('needs-reconciliation');
+    const receipts = attempt ? [housekeepingReceipt(s.operation.id, attempt)] : undefined;
+    if (receipts) {
+      try { await this.host.observeUsage(structuredClone(scope), structuredClone(receipts[0])); }
+      catch { return fail('usage-capture-failed', receipts); }
+    }
+    if (!await this.allowed(scope)) return fail('unauthorized', receipts);
+    const reconciled = await this.read(scope);
+    if (!reconciled.ok) return { ...reconciled, ...(receipts ? { receipts } : {}) };
+    const current = reconciled.value;
+    if (current.sourceVersion !== s.sourceVersion || current.operation?.id !== s.operation.id
+      || current.operation.policyKey !== policyKey(policy)) return fail('conflict', receipts);
+    if (current.operation.failure) return fail(current.operation.failure, receipts ?? current.receipts);
+    // Provider completion cannot distinguish an aborted pre-commit write from an acknowledged
+    // success. Only the host's durably reconciled checkpoint can establish remembered coverage.
+    if (current.operation.phase !== 'completed') return fail('needs-reconciliation', receipts);
+    return this.result(current, policy, 'recovered');
   }
 
   private async settle(claimed: ContextCheckpoint, attempt: SummaryAttempt, policy: ContextPolicy,
     recovered: boolean, signal?: AbortSignal, observedReceipt?: HousekeepingReceipt): Promise<ContextResult<ContextOutcome>> {
     const operation = claimed.operation!;
-    const receipt: HousekeepingReceipt = { operationId: operation.id,
-      status: ['completed', 'failed', 'incomplete'].includes(attempt?.status) ? attempt.status : 'failed',
-      usage: measuredUsage(attempt?.usage) };
+    const receipt = housekeepingReceipt(operation.id, attempt);
     // Liability survives summary failure, stale CAS, and unknown provider usage.
     try {
       if (!observedReceipt) await this.host.observeUsage(structuredClone(claimed.scope), structuredClone(receipt));
