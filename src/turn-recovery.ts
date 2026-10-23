@@ -5,8 +5,11 @@ import {
 
 export interface TurnIdentity { conversationId: string; turnId: string }
 export type RecoveryAction = 'start' | 'dispatch' | 'recover' | 'replay' | 'cancel';
-export type EffectCheckpoint = { status: 'pending' | 'dispatching' }
+export type EffectCheckpoint = { status: 'pending' }
+  | { status: 'dispatching'; claimRevision: number; admitted: boolean }
   | { status: 'completed'; result: unknown };
+export type DispatchAdmission<T> = { admitted: false; reason: 'cancelled' | 'conflict' | 'unauthorized' }
+  | { admitted: true; result: Promise<T> };
 /** Stored alongside existing host session state. Version and CAS come from ChatStateV1. */
 export interface TurnCheckpoint {
   state: ChatStateV1;
@@ -16,6 +19,13 @@ export interface TurnCheckpointStore {
   read(identity: TurnIdentity): Promise<TurnCheckpoint | null>;
   /** Atomic, identity-scoped CAS. Null creates; revisions advance exactly once. */
   compareAndSwap(identity: TurnIdentity, revision: number | null, next: TurnCheckpoint): Promise<boolean>;
+  /** Under the SAME fence/transaction as cancellation CAS: revalidate current
+   * host authority, running phase, effect claim and !admitted; durably mark
+   * admitted and invoke launch ONCE before releasing the fence. Never await the
+   * returned effect promise under the fence. An uncertain admission must never
+   * be retried. Existing host session/owned-loop storage supplies this seam. */
+  admitDispatch<T>(identity: TurnIdentity, effectId: string, claimRevision: number,
+    launch: () => Promise<T>): Promise<DispatchAdmission<T>>;
 }
 export interface ReplayWindow {
   /** Host SSE/persistence watermark, including an empty retained window. */
@@ -36,7 +46,7 @@ export interface TurnRecoveryAdapter {
 export type RecoveryFailureCode = 'invalid-state' | 'unauthorized' | 'storage-unavailable'
   | 'checkpoint-write-failed' | 'conflict' | 'cancelled' | 'cancellation-failed'
   | 'needs-reconciliation' | 'restart-recovery-unsupported' | 'replay-unsupported'
-  | 'invalid-cursor' | 'replay-expired';
+  | 'invalid-cursor' | 'replay-expired' | 'dispatch-admission-unsupported';
 export type RecoveryResult<T> = { ok: true; value: T } | { ok: false; code: RecoveryFailureCode };
 export interface RecoveredEffect extends TurnIdentity {
   effectId: string;
@@ -68,6 +78,8 @@ export class TurnRecovery {
       || !record.effects || typeof record.effects !== 'object' || Array.isArray(record.effects)
       || Object.entries(record.effects).some(([key, effect]) => !id(key) || !effect
         || !['pending', 'dispatching', 'completed'].includes(effect.status)
+        || (effect.status === 'dispatching' && (!counter(effect.claimRevision)
+          || effect.claimRevision < 1 || typeof effect.admitted !== 'boolean'))
         || (effect.status === 'completed' && !Object.hasOwn(effect, 'result')))) return fail('invalid-state');
     return { ok: true, value: structuredClone(record) };
   }
@@ -124,12 +136,13 @@ export class TurnRecovery {
     if (effect.status === 'completed') return this.completed(identity, effectId, effect, 'checkpoint');
     if (record.state.phase === 'cancelled' || signal.aborted) return fail('cancelled');
     if (record.state.phase !== 'running' || effect.status !== 'pending') return fail('needs-reconciliation');
+    if (typeof this.adapter.store.admitDispatch !== 'function') return fail('dispatch-admission-unsupported');
     let candidate = record;
     let ownsClaim = false;
     for (let attempt = 0; attempt < 2; attempt++) {
       const claimed = structuredClone(candidate);
       claimed.state.revision++;
-      claimed.effects[effectId] = { status: 'dispatching' };
+      claimed.effects[effectId] = { status: 'dispatching', claimRevision: claimed.state.revision, admitted: false };
       try {
         ownsClaim = await this.adapter.store.compareAndSwap(identity, candidate.state.revision, claimed);
       } catch { return fail('needs-reconciliation'); }
@@ -160,9 +173,23 @@ export class TurnRecovery {
       return fail('needs-reconciliation');
     }
     if (signal.aborted) return fail('cancelled');
+    // A read can return a snapshot taken before a concurrent cancellation. The
+    // host's atomic admission, NOT this snapshot or delayed abort propagation,
+    // decides which side won. Per-effect identity allows unrelated effects to
+    // advance the turn revision without invalidating this exclusive claim.
+    let admission: DispatchAdmission<unknown>;
+    let started = false;
+    try {
+      admission = await this.adapter.store.admitDispatch(identity, effectId, currentEffect.claimRevision, () => {
+        if (signal.aborted) return Promise.reject(new Error('cancelled-before-launch'));
+        started = true;
+        return dispatch({ ...identity, effectId, signal });
+      });
+    } catch { return fail('needs-reconciliation'); }
+    if (!admission.admitted) return fail(admission.reason);
     let result: unknown;
-    try { result = await dispatch({ ...identity, effectId, signal }); }
-    catch { return fail('needs-reconciliation'); }
+    try { result = await admission.result; }
+    catch { return fail(!started && signal.aborted ? 'cancelled' : 'needs-reconciliation'); }
     // Cancellation may change the revision while an effect is in flight. Preserve its result
     // without reopening the cancelled turn. A failed/uncertain checkpoint never permits dispatch.
     for (let attempt = 0; attempt < 2; attempt++) {

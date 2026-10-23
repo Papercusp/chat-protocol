@@ -128,6 +128,7 @@ describe('turn recovery contract', () => {
     record.state.schemaVersion = 99 as 1;
     const worker = new TurnRecovery({ ...f.adapter, store: { ...f.store,
       async read() { return record; }, compareAndSwap: f.store.compareAndSwap.bind(f.store),
+      admitDispatch: f.store.admitDispatch.bind(f.store),
     } });
     expect(await worker.recover(turn, 'read-1')).toEqual({ ok: false, code: 'invalid-state' });
   });

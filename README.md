@@ -62,6 +62,15 @@ interfaces. The adapter supplies current caller authorization, the existing
 session store's atomic compare-and-swap, its SSE/event replay window, and an
 abort hook for host-owned execution. A turn starts with host-authorized effect
 identities. Each effect is claimed before dispatch; completed results are reused.
+The store must implement `admitDispatch` under the same transaction/fence as
+cancellation: revalidate current caller authority, the running turn and the
+effect's claim revision, durably mark admission, then invoke the launch callback
+exactly once before releasing the fence. Await the callback's result outside the
+fence. Admission is persisted per effect so other effects can advance the turn
+revision concurrently. A delayed snapshot or abort hook cannot authorize launch;
+a missing admission seam refuses dispatch. A launch admitted before cancellation
+is an in-flight effect: cancellation aborts it through the host, and any unknown
+external outcome still requires reconciliation.
 Dispatch errors and uncertain claim acknowledgements return
 `needs-reconciliation`. Hosts reconcile unknown outcomes through their existing
 effect/idempotency lookup and persist verified results through the same CAS seam;

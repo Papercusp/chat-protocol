@@ -173,4 +173,47 @@ describe('turn recovery across worker boundaries (deterministic host fakes)', ()
     expect(outcome).toEqual({ ok: false, code: 'cancelled' });
     expect(f.calls).toHaveLength(0);
   });
+
+  it('atomic admission refuses revoked authority and a second launch for the same claim', async () => {
+    const f = recoveryFixture();
+    await f.worker.start(turn, ['read-1']);
+    const admit = f.store.admitDispatch.bind(f.store);
+    f.store.admitDispatch = async (...args) => { f.authorized = false; return admit(...args); };
+    expect(await f.worker.runEffect(turn, 'read-1', f.dispatch, f.control.signal))
+      .toEqual({ ok: false, code: 'unauthorized' });
+    expect(f.calls).toHaveLength(0);
+    f.authorized = true;
+    const record = await f.store.read(turn);
+    const effect = record?.effects['read-1'];
+    if (effect?.status !== 'dispatching') throw new Error('missing claim');
+    const launch = () => f.dispatch({ ...turn, effectId: 'read-1', signal: f.control.signal });
+    const winner = await admit(turn, 'read-1', effect.claimRevision, launch);
+    expect(winner.admitted).toBe(true);
+    if (winner.admitted) await winner.result;
+    expect(await admit(turn, 'read-1', effect.claimRevision, launch)).toEqual({ admitted: false, reason: 'conflict' });
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it('uncertain dispatch admission acknowledgement never launches a second effect', async () => {
+    const f = recoveryFixture();
+    await f.worker.start(turn, ['read-1']);
+    f.store.loseAdmissionAcknowledgement = true;
+    expect(await f.worker.runEffect(turn, 'read-1', f.dispatch, f.control.signal))
+      .toEqual({ ok: false, code: 'needs-reconciliation' });
+    expect(await f.worker.runEffect(turn, 'read-1', f.dispatch, f.control.signal))
+      .toEqual({ ok: false, code: 'needs-reconciliation' });
+    expect(f.calls).toHaveLength(1);
+    expect((await f.worker.recover(turn, 'read-1'))).toEqual({ ok: false, code: 'needs-reconciliation' });
+  });
+
+  it('refuses dispatch when the host has no atomic admission seam', async () => {
+    const f = recoveryFixture();
+    await f.worker.start(turn, ['read-1']);
+    const store = { read: f.store.read.bind(f.store), compareAndSwap: f.store.compareAndSwap.bind(f.store) };
+    const worker = new TurnRecovery({ ...f.adapter, store: store as unknown as typeof f.store });
+    expect(await worker.runEffect(turn, 'read-1', f.dispatch, f.control.signal))
+      .toEqual({ ok: false, code: 'dispatch-admission-unsupported' });
+    expect(f.calls).toHaveLength(0);
+    expect((await f.store.read(turn))?.effects['read-1'].status).toBe('pending');
+  });
 });

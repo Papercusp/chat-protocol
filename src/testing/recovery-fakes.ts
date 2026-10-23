@@ -1,5 +1,5 @@
 import {
-  TurnRecovery, type TurnIdentity, type TurnCheckpoint, type TurnCheckpointStore, type TurnRecoveryAdapter,
+  TurnRecovery, type DispatchAdmission, type TurnIdentity, type TurnCheckpoint, type TurnCheckpointStore, type TurnRecoveryAdapter,
 } from '../turn-recovery.js';
 import { FakeClock, FakeStorage, fourEventReplay } from './fakes.js';
 import type { ChatRecoveryCapabilities } from '../protocol-v1.js';
@@ -20,6 +20,8 @@ export class RecoveryStorage implements TurnCheckpointStore {
   failCompletion = false;
   loseCompletionAcknowledgement = false;
   loseClaimAcknowledgement = false;
+  loseAdmissionAcknowledgement = false;
+  authorizeDispatch: (identity: TurnIdentity, effectId: string) => boolean = () => true;
   reads = 0;
   constructor(readonly records = new Map<string, TurnCheckpoint>()) {}
   async read(identity: TurnIdentity): Promise<TurnCheckpoint | null> {
@@ -45,11 +47,35 @@ export class RecoveryStorage implements TurnCheckpointStore {
     }
     return true;
   }
+  async admitDispatch<T>(identity: TurnIdentity, effectId: string, claimRevision: number,
+    launch: () => Promise<T>): Promise<DispatchAdmission<T>> {
+    if (!this.available) throw new Error('storage-unavailable');
+    // No await: these checks, the durable admission and launch are one fake
+    // critical section, serialized with the synchronous CAS mutation above.
+    if (!this.authorizeDispatch(identity, effectId)) return { admitted: false, reason: 'unauthorized' };
+    const record = this.records.get(key(identity));
+    if (record?.state.phase === 'cancelled') return { admitted: false, reason: 'cancelled' };
+    const effect = record?.effects[effectId];
+    if (!record || record.state.phase !== 'running' || effect?.status !== 'dispatching'
+      || effect.claimRevision !== claimRevision || effect.admitted) return { admitted: false, reason: 'conflict' };
+    const next = structuredClone(record);
+    next.state.revision++;
+    next.effects[effectId] = { ...effect, admitted: true };
+    this.records.set(key(identity), next);
+    const result = launch();
+    if (this.loseAdmissionAcknowledgement) {
+      this.loseAdmissionAcknowledgement = false;
+      void result.catch(() => {}); // The outcome is explicitly unknown to the caller.
+      throw new Error('admission-ack-lost');
+    }
+    return { admitted: true, result };
+  }
 }
 export function recoveryFixture(capabilities = durableCapabilities, store = new RecoveryStorage(),
   events = new FakeStorage(new FakeClock())) {
   const control = new AbortController();
   const fixture = { authorized: true, calls: [] as Array<TurnIdentity & { effectId: string }>, store, events, control };
+  store.authorizeDispatch = identity => fixture.authorized && key(identity) === key(recoveryIdentity);
   const adapter: TurnRecoveryAdapter = {
     capabilities: { ...capabilities }, store,
     async authorize(_action, identity, effectId) {
