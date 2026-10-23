@@ -32,7 +32,8 @@ export interface InteractionTransaction {
 }
 export interface InteractionMutation<T> {
   result: InteractionResult<T>;
-  /** Write the decision AND advance the host workflow exactly once in this transaction.
+  /** Persist the transition atomically. A resolved decision also advances the
+   * host answer workflow exactly once; cancellation never advances it.
    * This means a persisted workflow transition, never an untracked external call. */
   next?: InteractionRecord;
 }
@@ -122,6 +123,39 @@ export class InteractionResolver {
     try {
       return await this.adapter.store.transact(identity, caller, current => ({ result: this.checked(current, identity, caller) }));
     } catch { return fail('storage-unavailable'); }
+  }
+
+  /** Host timeout/abort transition, including AFTER expiry. Unlike a user
+   * answer this does not resolve or advance the answer workflow. Concurrent
+   * cancellation of the same pending revision converges to the same state. */
+  async cancel(identity: InteractionIdentity, caller: InteractionScope,
+    revision: number): Promise<InteractionResult<InteractionRecord>> {
+    let bound: InteractionIdentity;
+    let principal: InteractionScope;
+    try { bound = structuredClone(identity); principal = structuredClone(caller); }
+    catch { return fail('invalid-answer'); }
+    if (!bound || !id(bound.conversationId) || !id(bound.correlationId)
+      || !counter(revision) || !counter(revision + 1)) return fail('invalid-answer');
+    try {
+      return await this.adapter.store.transact(bound, principal, current => {
+        const checked = this.checked(current, bound, principal);
+        if (!checked.ok) return { result: checked };
+        const record = checked.value;
+        if (record.status === 'resolved') return { result: fail('already-decided') };
+        if (record.status === 'cancelled' && record.revision === revision + 1) return { result: checked };
+        if (record.revision !== revision) return { result: fail('stale-revision') };
+        if (record.status === 'cancelled') return { result: fail('cancelled') };
+        const next: InteractionRecord = { ...record, status: 'cancelled', revision: revision + 1 };
+        return { next, result: { ok: true, value: structuredClone(next) } };
+      });
+    } catch {
+      // A single read proves the desired cancellation state. Never repeat a
+      // write after an unknown outcome, nor replace a winning answer.
+      const recovered = await this.read(bound, principal);
+      if (recovered.ok && recovered.value.status === 'cancelled'
+        && recovered.value.revision === revision + 1) return recovered;
+      return fail('needs-reconciliation');
+    }
   }
 
   async resolve(identity: InteractionIdentity, caller: InteractionScope,

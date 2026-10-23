@@ -37,7 +37,7 @@ export class InteractionStorage implements InteractionStore {
       if (this.failBeforeCommit) throw new Error('write-failed');
       const next = structuredClone(mutation.next);
       this.storage.db.interactions.set(key, next);
-      this.storage.db.interactionAdvances.push(structuredClone(next));
+      if (next.status === 'resolved') this.storage.db.interactionAdvances.push(structuredClone(next));
       if (this.loseNextAcknowledgement) {
         this.loseNextAcknowledgement = false;
         throw new Error('ack-lost');

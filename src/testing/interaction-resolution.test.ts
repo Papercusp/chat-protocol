@@ -4,6 +4,73 @@ import { interactionAnswer, interactionFixture, interactionIdentity as identity,
   interactionKey, interactionScope as scope, pendingInteraction } from './interaction-fakes.js';
 
 describe('scoped interaction resolution', () => {
+  it('cancels pending and expired cards without advancing the answer workflow', async () => {
+    for (const elapsed of [0, 100, 101]) {
+      const f = interactionFixture();
+      f.storage.clock.advance(elapsed);
+      expect(await f.resolver.cancel(identity, scope, 0)).toMatchObject({ ok: true,
+        value: { status: 'cancelled', revision: 1 } });
+      expect(f.record().decision).toBeUndefined();
+      expect(f.advances).toHaveLength(0);
+      expect(await f.resolver.resolve(identity, scope, interactionAnswer())).toEqual({ ok: false, code: 'cancelled' });
+      expect(await f.resolver.cancel(identity, scope, 0)).toMatchObject({ ok: true,
+        value: { status: 'cancelled', revision: 1 } });
+    }
+  });
+
+  it('fences cancellation by current authority scope identity and revision', async () => {
+    for (const field of ['principalId', 'tenantId', 'customerId', 'publicOwnerId'] as const) {
+      const f = interactionFixture();
+      expect(await f.resolver.cancel(identity, { ...scope, [field]: 'foreign' }, 0))
+        .toEqual({ ok: false, code: 'unauthorized' });
+      expect(f.record().status).toBe('pending');
+    }
+    const f = interactionFixture();
+    expect(await f.resolver.cancel({ ...identity, conversationId: 'foreign' }, scope, 0))
+      .toEqual({ ok: false, code: 'not-found' });
+    expect(await f.resolver.cancel(identity, scope, 1)).toEqual({ ok: false, code: 'stale-revision' });
+    f.store.authorized = false;
+    expect(await f.resolver.cancel(identity, scope, 0)).toEqual({ ok: false, code: 'unauthorized' });
+    expect(f.record().status).toBe('pending');
+    expect(f.advances).toHaveLength(0);
+  });
+
+  it('preserves an answer committed while cancellation races asynchronous validation', async () => {
+    const f = interactionFixture();
+    expect((await f.resolver.resolve(identity, scope, interactionAnswer())).ok).toBe(true);
+    const decided = structuredClone(f.record());
+    expect(await f.resolver.cancel(identity, scope, 0)).toEqual({ ok: false, code: 'already-decided' });
+    expect(f.record()).toEqual(decided);
+    expect(f.advances).toHaveLength(1);
+    const cancelled = interactionFixture();
+    const validate = cancelled.adapter.validate;
+    cancelled.adapter.validate = async (schema, value) => {
+      await cancelled.resolver.cancel(identity, scope, 0);
+      return validate(schema, value);
+    };
+    expect(await cancelled.resolver.resolve(identity, scope, interactionAnswer()))
+      .toEqual({ ok: false, code: 'cancelled' });
+    expect(cancelled.advances).toHaveLength(0);
+  });
+
+  it('reconciles a lost cancellation acknowledgement with one read and never retries the write', async () => {
+    const f = interactionFixture();
+    f.store.loseNextAcknowledgement = true;
+    expect(await f.resolver.cancel(identity, scope, 0)).toMatchObject({ ok: true,
+      value: { status: 'cancelled', revision: 1 } });
+    expect(f.advances).toHaveLength(0);
+    const failed = interactionFixture();
+    failed.store.failBeforeCommit = true;
+    expect(await failed.resolver.cancel(identity, scope, 0)).toEqual({ ok: false, code: 'needs-reconciliation' });
+    expect(failed.record().status).toBe('pending');
+    failed.store.available = false;
+    expect(await failed.resolver.cancel(identity, scope, 0)).toEqual({ ok: false, code: 'needs-reconciliation' });
+    for (const revision of [-1, NaN, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(await interactionFixture().resolver.cancel(identity, scope, revision))
+        .toEqual({ ok: false, code: 'invalid-answer' });
+    }
+  });
+
   it('accepts one schema-valid answer from the bound principal and conversation and advances once', async () => {
     const f = interactionFixture();
     const unrelated = { ...identity, correlationId: 'unrelated' };
