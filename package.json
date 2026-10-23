@@ -12,6 +12,11 @@
       "import": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./recovery": {
+      "types": "./src/turn-recovery.ts",
+      "import": "./src/turn-recovery.ts",
+      "default": "./src/turn-recovery.ts"
+    },
     "./testing": {
       "types": "./src/testing/conformance.ts",
       "import": "./src/testing/conformance.ts",
