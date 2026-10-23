@@ -11,14 +11,22 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./testing": {
+      "types": "./src/testing/conformance.ts",
+      "import": "./src/testing/conformance.ts",
+      "default": "./src/testing/conformance.ts"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "devDependencies": {
     "@papercusp/test-config": "*",
+    "@types/node": "^22.0.0",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
     "vitest": "^4.1.4"
   },
   "publishConfig": {
