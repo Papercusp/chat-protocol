@@ -256,11 +256,11 @@ export class ConversationContext {
     let attempt: SummaryAttempt;
     try {
       const ids = new Set(claimed.operation.inputIds);
-      attempt = await this.host.summarize({ scope: structuredClone(scope), operationId,
+      attempt = structuredClone(await this.host.summarize({ scope: structuredClone(scope), operationId,
         priorSummary: structuredClone(s.summary), records: s.history.filter(m => ids.has(m.id)).map(m => ({
           ...structuredClone(m), text: m.text.slice(0, policy.maxMessageChars ?? 8000),
           payload: { originalChars: m.text.length, retainedChars: Math.min(m.text.length, policy.maxMessageChars ?? 8000) },
-        })), ...(signal ? { signal } : {}) });
+        })), ...(signal ? { signal } : {}) }));
     } catch (e) {
       attempt = { status: 'failed', usage: measuredUsage((e as { usage?: unknown } | null)?.usage) ?? undefined };
     }
@@ -275,6 +275,8 @@ export class ConversationContext {
     const loaded = await this.read(scope);
     if (!loaded.ok) return loaded;
     const s = loaded.value;
+    const selected = selectConversationContext(scope, s.history, policy, s.summary);
+    if (!selected.ok) return selected;
     if (!s.operation || s.operation.phase === 'completed') return this.result(s, policy, 'recovered');
     if (s.operation.sourceVersion !== s.sourceVersion || s.operation.policyKey !== policyKey(policy)) return fail('conflict');
     let attempt: SummaryAttempt | null;
@@ -306,8 +308,9 @@ export class ConversationContext {
       invalid = !uniqueIds(ids) || ids.length !== operation.inputIds.length
         || ids.some(id => !operation.inputIds.includes(id)) || typeof attempt.text !== 'string' || !attempt.text.trim();
       if (!invalid) {
+        const covered = new Set([...(current.summary?.coveredIds ?? []), ...ids!]);
         next.summary = { scope: structuredClone(current.scope), text: attempt.text!, operationId: operation.id,
-          coveredIds: current.history.filter(m => new Set([...(current.summary?.coveredIds ?? []), ...ids!]).has(m.id)).map(m => m.id) };
+          coveredIds: current.history.filter(m => covered.has(m.id)).map(m => m.id) };
         const bounded = selectConversationContext(next.scope, next.history, policy, next.summary);
         if (!bounded.ok) { invalid = true; next.summary = current.summary; }
         else compacted = true;
