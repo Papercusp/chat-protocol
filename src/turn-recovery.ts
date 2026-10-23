@@ -124,12 +124,27 @@ export class TurnRecovery {
     if (effect.status === 'completed') return this.completed(identity, effectId, effect, 'checkpoint');
     if (record.state.phase === 'cancelled' || signal.aborted) return fail('cancelled');
     if (record.state.phase !== 'running' || effect.status !== 'pending') return fail('needs-reconciliation');
-    const claimed = structuredClone(record);
-    claimed.state.revision++;
-    claimed.effects[effectId] = { status: 'dispatching' };
-    try {
-      if (!await this.adapter.store.compareAndSwap(identity, record.state.revision, claimed)) return fail('conflict');
-    } catch { return fail('needs-reconciliation'); }
+    let candidate = record;
+    let ownsClaim = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const claimed = structuredClone(candidate);
+      claimed.state.revision++;
+      claimed.effects[effectId] = { status: 'dispatching' };
+      try {
+        ownsClaim = await this.adapter.store.compareAndSwap(identity, candidate.state.revision, claimed);
+      } catch { return fail('needs-reconciliation'); }
+      if (ownsClaim) break;
+      const latest = await this.read(identity);
+      if (!latest.ok) return latest;
+      if (latest.value.state.phase === 'cancelled' || signal.aborted) return fail('cancelled');
+      // Retry only the CHECKPOINT claim when another effect advanced the turn's
+      // revision. This is before any dispatch and cannot retry an external effect.
+      if (latest.value.state.phase !== 'running' || latest.value.effects[effectId]?.status !== 'pending') {
+        return fail('conflict');
+      }
+      candidate = latest.value;
+    }
+    if (!ownsClaim) return fail('conflict');
     // Re-read after the claim: cancellation and authority revocation may race that await.
     const current = await this.read(identity);
     if (!current.ok) return current;
