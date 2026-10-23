@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ModelBackendFailure, normalizeModelFailure, runModelBackend,
-  type ModelBackend, type ModelBackendFrame, type ModelBackendPolicy } from '../model-backend.js';
+  type ModelBackend, type ModelBackendFrame, type ModelBackendObservation, type ModelBackendPolicy } from '../model-backend.js';
 
 const policy: ModelBackendPolicy = { maxAttempts: 2, backoffMs: 10, deadlineMs: 100, maxFrameBytes: 4096 };
 const capabilities = { streaming: true, toolObservations: true, nativeSession: true, providerState: true };
@@ -112,5 +112,65 @@ describe('bounded model backend contract', () => {
     await result;
     expect(stream).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('honors caller abort even when a provider ignores next and return', async () => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    let childSignal: AbortSignal | undefined;
+    const next = vi.fn(() => new Promise<IteratorResult<ModelBackendFrame>>(() => {}));
+    const close = vi.fn(() => new Promise<IteratorResult<ModelBackendFrame>>(() => {}));
+    const stream = vi.fn((_input: string, context: { signal: AbortSignal }) => {
+      childSignal = context.signal;
+      return { [Symbol.asyncIterator]: () => ({ next, return: close }) };
+    });
+    const observations: ModelBackendObservation[] = [];
+    const consume = async () => {
+      for await (const e of runModelBackend(backend(stream), '', { policy, signal: caller.signal })) observations.push(e);
+    };
+    const result = expect(consume()).rejects.toMatchObject({ code: 'aborted' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(next).toHaveBeenCalledTimes(1);
+    caller.abort();
+    await result;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(childSignal?.aborted).toBe(true);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(observations).toEqual([
+      { backendId: 'fixture', model: 'fixture-model', attempt: 1, type: 'attempt', outcome: 'started' },
+      { backendId: 'fixture', model: 'fixture-model', attempt: 1, type: 'attempt', outcome: 'failed', failure: 'aborted' },
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('completes below the total deadline and refuses exactly and above the deadline', async () => {
+    vi.useFakeTimers();
+    for (const delayMs of [99, 100, 101]) {
+      const port = backend(async function* () {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        yield { event: { type: 'done' } } as ModelBackendFrame;
+      });
+      const result = collect(port);
+      const assertion = delayMs < 100
+        ? expect(result).resolves.toContainEqual(expect.objectContaining({ type: 'frame', frame: { event: { type: 'done' } } }))
+        : expect(result).rejects.toMatchObject({ code: 'deadline-exceeded' });
+      await vi.advanceTimersByTimeAsync(101);
+      await assertion;
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  });
+
+  it('enforces serialized UTF-8 frame budget below exactly and above 4096 bytes', async () => {
+    const overhead = new TextEncoder().encode(JSON.stringify({ event: { type: 'delta', text: '' } })).length;
+    for (const bytes of [4095, 4096, 4097]) {
+      const frame = { event: { type: 'delta' as const, text: 'x'.repeat(bytes - overhead - 2) + 'é' } };
+      expect(new TextEncoder().encode(JSON.stringify(frame))).toHaveLength(bytes);
+      const stream = vi.fn(async function* () { yield frame; yield { event: { type: 'done' } } as ModelBackendFrame; });
+      if (bytes <= 4096) expect((await collect(backend(stream))).filter(e => e.type === 'frame')).toHaveLength(2);
+      else await expect(collect(backend(stream))).rejects.toMatchObject({ code: 'invalid-frame' });
+      expect(stream).toHaveBeenCalledTimes(1);
+    }
   });
 });
