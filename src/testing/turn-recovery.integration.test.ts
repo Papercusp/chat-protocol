@@ -136,4 +136,41 @@ describe('turn recovery across worker boundaries (deterministic host fakes)', ()
     expect(f.calls).toHaveLength(0);
     expect((await f.store.read(turn))?.effects['read-1'].status).toBe('dispatching');
   });
+
+  it('cancellation committed during the final checkpoint read prevents dispatch from a stale snapshot', async () => {
+    const f = recoveryFixture();
+    const read = f.store.read.bind(f.store);
+    let dispatchAuthorizations = 0;
+    let pauseRead = false;
+    let cancellation: ReturnType<TurnRecovery['cancel']> | undefined;
+    let releaseAbort!: () => void;
+    let enteredAbort!: () => void;
+    const abortEntered = new Promise<void>(resolve => { enteredAbort = resolve; });
+    const abortReleased = new Promise<void>(resolve => { releaseAbort = resolve; });
+    const worker = new TurnRecovery({ ...f.adapter,
+      async authorize(action, identity, effectId) {
+        const allowed = await f.adapter.authorize(action, identity, effectId);
+        if (action === 'dispatch' && ++dispatchAuthorizations === 2) pauseRead = true;
+        return allowed;
+      },
+      async abortExecution() { enteredAbort(); await abortReleased; f.control.abort(); },
+    });
+    f.store.read = async identity => {
+      const snapshot = await read(identity);
+      if (pauseRead) {
+        pauseRead = false;
+        cancellation = worker.cancel(turn);
+        await abortEntered;
+        expect((await read(turn))?.state.phase).toBe('cancelled');
+        expect(f.control.signal.aborted).toBe(false);
+      }
+      return snapshot;
+    };
+    await worker.start(turn, ['read-1']);
+    let outcome;
+    try { outcome = await worker.runEffect(turn, 'read-1', f.dispatch, f.control.signal); }
+    finally { releaseAbort(); await cancellation; }
+    expect(outcome).toEqual({ ok: false, code: 'cancelled' });
+    expect(f.calls).toHaveLength(0);
+  });
 });

@@ -145,7 +145,10 @@ export class TurnRecovery {
       candidate = latest.value;
     }
     if (!ownsClaim) return fail('conflict');
-    // Re-read after the claim: cancellation and authority revocation may race that await.
+    // Authorization can await remote state. Revalidate cancellation AFTER that
+    // boundary: the host may have committed cancellation while its abort hook
+    // is still pending, so signal.aborted alone is insufficient.
+    if (!await this.allowed('dispatch', identity, effectId)) return fail('unauthorized');
     const current = await this.read(identity);
     if (!current.ok) return current;
     if (current.value.state.phase === 'cancelled' || signal.aborted) return fail('cancelled');
@@ -156,7 +159,6 @@ export class TurnRecovery {
     if (current.value.state.phase !== 'running' || currentEffect?.status !== 'dispatching') {
       return fail('needs-reconciliation');
     }
-    if (!await this.allowed('dispatch', identity, effectId)) return fail('unauthorized');
     if (signal.aborted) return fail('cancelled');
     let result: unknown;
     try { result = await dispatch({ ...identity, effectId, signal }); }
