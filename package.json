@@ -27,6 +27,11 @@
       "import": "./src/model-backend.ts",
       "default": "./src/model-backend.ts"
     },
+    "./context": {
+      "types": "./src/conversation-context.ts",
+      "import": "./src/conversation-context.ts",
+      "default": "./src/conversation-context.ts"
+    },
     "./testing": {
       "types": "./src/testing/conformance.ts",
       "import": "./src/testing/conformance.ts",
