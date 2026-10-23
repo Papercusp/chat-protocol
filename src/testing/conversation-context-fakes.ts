@@ -22,10 +22,11 @@ export function contextHost(history = [contextRecord('old-a', 'a'.repeat(1400)),
     authorize: vi.fn(async (scope: ContextScope) => scope.ownerId === contextScope.ownerId
       && scope.conversationId === contextScope.conversationId),
     read: vi.fn(async () => structuredClone(checkpoint)),
-    compareAndSwap: vi.fn(async (scope: ContextScope, revision: number, next: ContextCheckpoint) => {
+    compareAndSwap: vi.fn(async (scope: ContextScope, revision: number, next: ContextCheckpoint,
+      options: Parameters<ContextHost['compareAndSwap']>[3]) => {
       trace.push(`cas:${next.operation?.phase}`);
       if (scope.ownerId !== checkpoint.scope.ownerId || scope.conversationId !== checkpoint.scope.conversationId
-        || checkpoint.revision !== revision) return false;
+        || checkpoint.revision !== revision || options?.signal?.aborted) return false;
       checkpoint = structuredClone(next); return true;
     }),
     summarize: vi.fn(async (input: Parameters<ContextHost['summarize']>[0]): Promise<SummaryAttempt> => {

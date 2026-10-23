@@ -34,11 +34,11 @@ describe('conversation context host composition (tree only)', () => {
   it('fails closed on stale context CAS without losing housekeeping usage', async () => {
     const f = contextHost();
     const cas = f.host.compareAndSwap.getMockImplementation()!;
-    f.host.compareAndSwap.mockImplementation(async (scope, revision, next) => {
+    f.host.compareAndSwap.mockImplementation(async (scope, revision, next, options) => {
       if (next.operation?.phase === 'completed') {
         const newer = f.get(); newer.revision++; newer.sourceVersion = 'source-2'; f.set(newer); return false;
       }
-      return cas(scope, revision, next);
+      return cas(scope, revision, next, options);
     });
     const r = await new ConversationContext(f.host).compact(contextScope, 'fold', contextPolicy);
     expect(r).toMatchObject({ ok: false, code: 'conflict', receipts: [{ usage: { inputTokens: 17, costUsd: 0.001 } }] });
@@ -51,9 +51,9 @@ describe('conversation context host composition (tree only)', () => {
     const f = contextHost();
     const cas = f.host.compareAndSwap.getMockImplementation()!;
     let crash = true;
-    f.host.compareAndSwap.mockImplementation(async (scope, revision, next) => {
+    f.host.compareAndSwap.mockImplementation(async (scope, revision, next, options) => {
       if (next.operation?.phase === 'completed' && crash) { crash = false; throw new Error('process lost before context commit'); }
-      return cas(scope, revision, next);
+      return cas(scope, revision, next, options);
     });
     expect(await new ConversationContext(f.host).compact(contextScope, 'fold', contextPolicy))
       .toMatchObject({ ok: false, code: 'needs-reconciliation' });
@@ -80,6 +80,59 @@ describe('conversation context host composition (tree only)', () => {
       .toMatchObject({ ok: false, code: 'restart-recovery-unsupported' });
     expect(f.host.read).not.toHaveBeenCalled();
     expect(f.host.summarize).not.toHaveBeenCalled();
+  });
+
+  it('fences late cancellation across usage authorization read and the final context write', async () => {
+    for (const boundary of ['summarize', 'usage', 'authorize', 'read', 'commit', 'none', 'after-commit']) {
+      for (const measured of [true, false]) {
+        const f = contextHost();
+        const controller = new AbortController();
+        const summarize = f.host.summarize.getMockImplementation()!;
+        f.host.summarize.mockImplementation(async input => {
+          const attempt = await summarize(input);
+          if (!measured) delete attempt.usage;
+          f.providerJournal.set(input.operationId, structuredClone(attempt));
+          if (boundary === 'summarize') controller.abort();
+          return attempt;
+        });
+        const observe = f.host.observeUsage.getMockImplementation()!;
+        f.host.observeUsage.mockImplementation(async (...args) => {
+          await observe(...args);
+          if (boundary === 'usage') controller.abort();
+        });
+        const authorize = f.host.authorize.getMockImplementation()!;
+        f.host.authorize.mockImplementation(async scope => {
+          const allowed = await authorize(scope);
+          if (boundary === 'authorize' && f.usageJournal.has('fold')) controller.abort();
+          return allowed;
+        });
+        const read = f.host.read.getMockImplementation()!;
+        f.host.read.mockImplementation(async () => {
+          const state = await read();
+          if (boundary === 'read' && f.usageJournal.has('fold')) controller.abort();
+          return state;
+        });
+        const cas = f.host.compareAndSwap.getMockImplementation()!;
+        f.host.compareAndSwap.mockImplementation(async (...args) => {
+          if (boundary === 'commit' && args[2].summary) controller.abort();
+          const committed = await cas(...args);
+          if (boundary === 'after-commit' && args[2].summary) controller.abort();
+          return committed;
+        });
+        const result = await new ConversationContext(f.host).compact(contextScope, 'fold', contextPolicy, controller.signal);
+        const cancelled = !['none', 'after-commit'].includes(boundary);
+        expect(result, `${boundary}/${measured}`).toMatchObject(cancelled
+          ? { ok: false, code: 'cancelled' } : { ok: true, value: { outcome: 'compacted' } });
+        expect(f.get().summary?.coveredIds ?? []).toEqual(cancelled ? [] : ['old-a', 'old-b']);
+        expect(f.usageJournal.get('fold')?.usage).toEqual(measured
+          ? { inputTokens: 17, outputTokens: 3, costUsd: 0.001 } : null);
+        expect(f.get().receipts).toEqual([f.usageJournal.get('fold')]);
+        expect(f.host.summarize).toHaveBeenCalledTimes(1);
+        const recovered = await new ConversationContext(f.host).recover(contextScope, contextPolicy);
+        expect(recovered).toMatchObject(cancelled ? { ok: false, code: 'cancelled' } : { ok: true });
+        expect(f.get().summary?.coveredIds ?? []).toEqual(cancelled ? [] : ['old-a', 'old-b']);
+      }
+    }
   });
 
   it('refuses foreign session context and summary coverage references', async () => {

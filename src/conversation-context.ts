@@ -31,11 +31,12 @@ export interface ContextSelection {
   summary: ContextSummary | null;
   omittedIds: string[];
   summaryCoveredIds: string[];
+  /** Estimate of the other four fields serialized together; this scalar is host accounting. */
   estimatedTokens: number;
 }
 export type ContextCode = 'invalid-budget' | 'invalid-context' | 'invalid-summary'
   | 'budget-exceeded' | 'unauthorized' | 'storage-unavailable' | 'conflict'
-  | 'needs-reconciliation' | 'restart-recovery-unsupported' | 'usage-capture-failed';
+  | 'needs-reconciliation' | 'restart-recovery-unsupported' | 'usage-capture-failed' | 'cancelled';
 export type ContextResult<T> = { ok: true; value: T }
   | { ok: false; code: ContextCode; receipts?: HousekeepingReceipt[] };
 type Usage = NonNullable<Extract<ChatEventV1, { type: 'done' }>['usage']>;
@@ -75,7 +76,11 @@ export interface ContextHost {
   profile: 'durable' | 'limited';
   authorize(scope: ContextScope): Promise<boolean>;
   read(scope: ContextScope): Promise<ContextCheckpoint | null>;
-  compareAndSwap(scope: ContextScope, revision: number, next: ContextCheckpoint): Promise<boolean>;
+  /** Check revision AND signal at the actual durable mutation boundary, after any awaits.
+   * Return false without writing if aborted. A successful commit wins over a later abort.
+   * Cancellation-only settlement omits signal so it can record refusal and usage. */
+  compareAndSwap(scope: ContextScope, revision: number, next: ContextCheckpoint,
+    options: { signal?: AbortSignal }): Promise<boolean>;
   summarize(input: {
     scope: ContextScope; operationId: string; priorSummary: ContextSummary | null;
     records: ContextViewRecord[]; signal?: AbortSignal;
@@ -141,15 +146,20 @@ function contextGroups(scope: ContextScope, history: readonly ContextRecord[]): 
  * Structural references and omission metadata are charged to the SAME hard budget. */
 export function selectConversationContext(scope: ContextScope, history: readonly ContextRecord[],
   policy: ContextPolicy, summary: ContextSummary | null = null): ContextResult<ContextSelection> {
+  if (!policy || typeof policy !== 'object') return fail('invalid-budget');
+  try {
+    scope = structuredClone(scope); history = structuredClone(history); summary = structuredClone(summary);
+  } catch { return fail('invalid-context'); }
   const maxChars = policy.maxMessageChars ?? 8000;
   if (!Number.isSafeInteger(policy.budgetTokens) || policy.budgetTokens <= 0
     || !Number.isSafeInteger(maxChars) || maxChars < 0) return fail('invalid-budget');
   const groups = contextGroups(scope, history);
   if (!groups) return fail('invalid-context');
-  const covered = new Set(summary?.coveredIds ?? []);
-  if (summary && (!sameScope(summary.scope, scope) || !validId(summary.operationId)
+  if (summary !== null && (!summary || typeof summary !== 'object'
+    || !sameScope(summary.scope, scope) || !validId(summary.operationId)
     || typeof summary.text !== 'string' || !summary.text.trim() || !uniqueIds(summary.coveredIds)
     || summary.coveredIds.some(id => !history.some(m => m.id === id)))) return fail('invalid-summary');
+  const covered = new Set(summary?.coveredIds ?? []);
   const latestUser = history.findLastIndex(m => m.role === 'user');
   const mandatory = new Set<number>();
   const members = new Map<number, number[]>();
@@ -168,8 +178,11 @@ export function selectConversationContext(scope: ContextScope, history: readonly
   const eligible = [...members.keys()].filter(g => !covered.has(history[members.get(g)![0]].id));
   const kept = new Set([...mandatory].filter(g => eligible.includes(g)));
   const selected = () => views.filter((_, i) => kept.has(groups[i]));
+  const envelope = () => ({ messages: selected(), summary: structuredClone(summary),
+    omittedIds: history.filter((m, i) => !covered.has(m.id) && !kept.has(groups[i])).map(m => m.id),
+    summaryCoveredIds: [...covered] });
   const estimate = policy.estimate ?? estimateContextTokens;
-  const cost = () => estimate(JSON.stringify({ messages: selected(), summary }));
+  const cost = () => estimate(JSON.stringify(envelope()));
   let used: number;
   try {
     used = cost();
@@ -184,9 +197,7 @@ export function selectConversationContext(scope: ContextScope, history: readonly
       else used = next;
     }
   } catch { return fail('invalid-budget'); }
-  return { ok: true, value: { messages: selected(), summary: structuredClone(summary),
-    omittedIds: history.filter((m, i) => !covered.has(m.id) && !kept.has(groups[i])).map(m => m.id),
-    summaryCoveredIds: [...covered], estimatedTokens: used } };
+  return { ok: true, value: { ...envelope(), estimatedTokens: used } };
 }
 
 function measuredUsage(value: unknown): Usage | null {
@@ -211,8 +222,8 @@ export class ConversationContext {
     catch { return fail('storage-unavailable'); }
     if (!s || s.schemaVersion !== 1 || !sameScope(s.scope, scope)
       || !Number.isSafeInteger(s.revision) || s.revision < 0 || !validId(s.sourceVersion)
-      || !contextGroups(scope, s.history) || !Array.isArray(s.receipts)
-      || s.receipts.some(r => !validId(r.operationId) || !['completed', 'failed', 'incomplete'].includes(r.status)
+      || !contextGroups(scope, s.history) || s.summary === undefined || s.operation === undefined || !Array.isArray(s.receipts)
+      || s.receipts.some(r => !r || !validId(r.operationId) || !['completed', 'failed', 'incomplete'].includes(r.status)
         || (r.usage !== null && measuredUsage(r.usage) === null))
       || new Set(s.receipts.map(r => r.operationId)).size !== s.receipts.length
       || (s.operation && (!validId(s.operation.id) || !['pending', 'completed'].includes(s.operation.phase)
@@ -249,7 +260,8 @@ export class ConversationContext {
     claimed.operation = { id: operationId, phase: 'pending', sourceVersion: s.sourceVersion,
       policyKey: policyKey(policy), inputIds: selected.value.omittedIds };
     try {
-      if (!await this.host.compareAndSwap(scope, s.revision, structuredClone(claimed))) return fail('conflict');
+      if (!await this.host.compareAndSwap(scope, s.revision, structuredClone(claimed), { signal }))
+        return fail(signal?.aborted ? 'cancelled' : 'conflict');
     } catch { return fail('needs-reconciliation'); }
     // Revalidate host authority after the asynchronous claim boundary.
     if (!await this.allowed(scope) || signal?.aborted) return fail('needs-reconciliation');
@@ -264,8 +276,7 @@ export class ConversationContext {
     } catch (e) {
       attempt = { status: 'failed', usage: measuredUsage((e as { usage?: unknown } | null)?.usage) ?? undefined };
     }
-    if (signal?.aborted) attempt = { ...attempt, status: 'failed' };
-    return this.settle(claimed, attempt, policy, false);
+    return this.settle(claimed, attempt, policy, false, signal);
   }
 
   async recover(scope: ContextScope, policy: ContextPolicy): Promise<ContextResult<ContextOutcome>> {
@@ -277,6 +288,7 @@ export class ConversationContext {
     const s = loaded.value;
     const selected = selectConversationContext(scope, s.history, policy, s.summary);
     if (!selected.ok) return selected;
+    if (s.operation?.failure) return fail(s.operation.failure, s.receipts);
     if (!s.operation || s.operation.phase === 'completed') return this.result(s, policy, 'recovered');
     if (s.operation.sourceVersion !== s.sourceVersion || s.operation.policyKey !== policyKey(policy)) return fail('conflict');
     let attempt: SummaryAttempt | null;
@@ -286,13 +298,15 @@ export class ConversationContext {
   }
 
   private async settle(claimed: ContextCheckpoint, attempt: SummaryAttempt, policy: ContextPolicy,
-    recovered: boolean): Promise<ContextResult<ContextOutcome>> {
+    recovered: boolean, signal?: AbortSignal, observedReceipt?: HousekeepingReceipt): Promise<ContextResult<ContextOutcome>> {
     const operation = claimed.operation!;
     const receipt: HousekeepingReceipt = { operationId: operation.id,
       status: ['completed', 'failed', 'incomplete'].includes(attempt?.status) ? attempt.status : 'failed',
       usage: measuredUsage(attempt?.usage) };
     // Liability survives summary failure, stale CAS, and unknown provider usage.
-    try { await this.host.observeUsage(structuredClone(claimed.scope), structuredClone(receipt)); }
+    try {
+      if (!observedReceipt) await this.host.observeUsage(structuredClone(claimed.scope), structuredClone(receipt));
+    }
     catch { return fail('usage-capture-failed', [receipt]); }
     if (!await this.allowed(claimed.scope)) return fail('unauthorized', [receipt]);
     const loaded = await this.read(claimed.scope);
@@ -301,9 +315,10 @@ export class ConversationContext {
     if (current.operation?.id !== operation.id || current.sourceVersion !== operation.sourceVersion
       || current.revision !== claimed.revision) return fail('conflict', [receipt]);
     const next = structuredClone(current);
+    const cancelled = signal?.aborted === true;
     let invalid = false;
     let compacted = false;
-    if (receipt.status === 'completed') {
+    if (!cancelled && receipt.status === 'completed') {
       const ids = attempt.coveredIds;
       invalid = !uniqueIds(ids) || ids.length !== operation.inputIds.length
         || ids.some(id => !operation.inputIds.includes(id)) || typeof attempt.text !== 'string' || !attempt.text.trim();
@@ -317,11 +332,18 @@ export class ConversationContext {
       }
     }
     next.revision++;
-    next.operation = { ...operation, phase: 'completed', ...(invalid ? { failure: 'invalid-summary' as const } : {}) };
+    next.operation = { ...operation, phase: 'completed', ...(cancelled ? { failure: 'cancelled' as const }
+      : invalid ? { failure: 'invalid-summary' as const } : {}) };
     next.receipts.push(receipt);
     try {
-      if (!await this.host.compareAndSwap(next.scope, current.revision, structuredClone(next))) return fail('conflict', [receipt]);
+      if (!await this.host.compareAndSwap(next.scope, current.revision, structuredClone(next), compacted ? { signal } : {})) {
+        // The host refused the proposed coverage at its write fence. Persist the cancellation
+        // on the still-pending operation, without repeating the provider or usage journal.
+        if (compacted && signal?.aborted) return this.settle(claimed, attempt, policy, recovered, signal, receipt);
+        return fail('conflict', [receipt]);
+      }
     } catch { return fail('needs-reconciliation', [receipt]); }
+    if (cancelled) return fail('cancelled', [receipt]);
     if (invalid) return fail('invalid-summary', [receipt]);
     return this.result(next, policy, recovered ? 'recovered' : compacted ? 'compacted' : 'summary-failed');
   }

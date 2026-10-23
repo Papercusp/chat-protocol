@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConversationContext, selectConversationContext, type ContextSummary, type SummaryAttempt } from '../conversation-context.js';
+import { ConversationContext, estimateContextTokens, selectConversationContext, type ContextSummary, type SummaryAttempt } from '../conversation-context.js';
 import { contextHost, contextPolicy, contextRecord, contextScope } from './conversation-context-fakes.js';
 
 describe('budgeted conversation context contract', () => {
@@ -35,6 +35,33 @@ describe('budgeted conversation context contract', () => {
     }
     expect(selectConversationContext(contextScope, history.filter(m => m.id !== 'result-a'), contextPolicy))
       .toMatchObject({ ok: false, code: 'invalid-context' });
+  });
+
+  it('charges omission and coverage references to the complete context envelope', () => {
+    const history = Array.from({ length: 1000 }, (_, i) => contextRecord(`omitted-${i}`, 'x'.repeat(700)));
+    history.push(contextRecord('latest', 'question', 'user'));
+    expect(selectConversationContext(contextScope, history, contextPolicy))
+      .toMatchObject({ ok: false, code: 'budget-exceeded' });
+    const small = history.slice(0, 5).concat(history.at(-1)!);
+    const summary: ContextSummary = { scope: contextScope, text: 'summary', coveredIds: [small[0].id], operationId: 'prior' };
+    const selected = selectConversationContext(contextScope, small, { budgetTokens: 512 }, summary);
+    expect(selected.ok).toBe(true);
+    if (!selected.ok) return;
+    const { estimatedTokens, ...envelope } = selected.value;
+    expect(envelope.omittedIds.length).toBeGreaterThan(0);
+    expect(envelope.summaryCoveredIds).toEqual([small[0].id]);
+    const exact = estimateContextTokens(JSON.stringify(envelope));
+    expect(estimatedTokens).toBe(exact);
+    expect(exact).toBeLessThanOrEqual(512);
+    const boundary = [contextRecord('latest', 'question', 'user')];
+    const one = selectConversationContext(contextScope, boundary, { budgetTokens: 512 });
+    expect(one.ok).toBe(true);
+    if (!one.ok) return;
+    const { estimatedTokens: ignored, ...oneEnvelope } = one.value;
+    const oneCost = estimateContextTokens(JSON.stringify(oneEnvelope));
+    for (const budgetTokens of [oneCost - 1, oneCost, oneCost + 1]) {
+      expect(selectConversationContext(contextScope, boundary, { budgetTokens }).ok).toBe(budgetTokens >= oneCost);
+    }
   });
 
   it('preserves stable pair references and explicit omitted payload provenance', () => {
