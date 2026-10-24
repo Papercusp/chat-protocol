@@ -19,6 +19,7 @@ export * from './protocol-v1.js';
 export * from './structured-results.js';
 export * from './legacy-chat.js';
 import { parseGoalOwnerReportRef, type GoalOwnerReportRefV1 } from './goal-owner-report.js';
+import type { ChatResultBlock } from './protocol-v1.js';
 export * from './goal-owner-report.js';
 
 /** Tool-call history may retain the original JSON-string representation.
@@ -715,6 +716,8 @@ export interface ChatTurn {
   source?: ChatTurnSource;
   tools?: ChatTurnToolCall[] | null;
   report?: ReportBlock | null;
+  /** Canonical result references; display and activation require current host authorization. */
+  results?: ChatResultBlock[] | null;
   provenance?: ChatTurnProvenance | null;
   error?: boolean;
   workRefs?: WorkRefHint[];

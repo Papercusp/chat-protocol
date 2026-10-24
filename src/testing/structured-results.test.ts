@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parseChatEventV1, type ChatResultBlock } from '../protocol-v1.js';
-import { parseStructuredResults, resultActionIntent } from '../structured-results.js';
+import { collectTurnResults, parseStructuredResults, resultActionIntent } from '../structured-results.js';
 
 const result = (kind: ChatResultBlock['kind'] = 'document'): ChatResultBlock => ({
   id: 'result-1', kind, title: 'A document', text: 'A source-backed answer',
@@ -9,6 +9,23 @@ const result = (kind: ChatResultBlock['kind'] = 'document'): ChatResultBlock => 
   actions: [{ id: 'open', kind: 'open-document', label: 'Open', ref: 'document:1' }],
 });
 describe('structured result contract', () => {
+  it('reconstructs result references from durable turn events with replacement by stable ID and no dispatch', () => {
+    const identity = { conversationId: 'conversation-one', turnId: 'turn-one' };
+    const envelope = (sequence: number, event: unknown) => ({ schemaVersion: 1, ...identity,
+      eventId: `event-${sequence}`, sequence, event });
+    const old = result();
+    const current = { ...old, title: 'Current authorized title' };
+    const events = [envelope(1, { type: 'result', blocks: [old] }),
+      envelope(2, { type: 'delta', text: 'answer' }), envelope(3, { type: 'result', blocks: [current] })];
+    expect(collectTurnResults(events, identity)).toEqual({ ok: true, value: [current] });
+    expect(collectTurnResults([], identity)).toEqual({ ok: true, value: [] });
+    for (const invalid of [null, [events[0], events[2]], [events[0], events[0]],
+      [{ ...events[0], conversationId: 'foreign' }], [{ ...events[0], turnId: 'foreign' }],
+      [{ ...events[0], schemaVersion: 2 }], [envelope(1, { type: 'result', blocks: [old, old] })]]) {
+      expect(collectTurnResults(invalid, identity)).toEqual({ ok: false, code: 'invalid' });
+    }
+  });
+
   it('preserves stable result identity and provenance across supported result kinds', () => {
     for (const kind of ['entity', 'document', 'report', 'task', 'suggestion'] as const) {
       const original = result(kind);
