@@ -11,6 +11,69 @@ export const SU_SESSION_PROTOCOL_VERSION = 1 as const;
 export const SU_SESSION_BACKENDS = ["claude", "codex", "omp"] as const;
 export type SuSessionBackend = (typeof SU_SESSION_BACKENDS)[number];
 
+/** Provider and execution transport are independent choices. */
+export const SU_SESSION_EXECUTION_KINDS = ["pty", "programmatic"] as const;
+export type SuSessionExecutionKind = (typeof SU_SESSION_EXECUTION_KINDS)[number];
+
+export function isSuSessionExecutionKind(value: unknown): value is SuSessionExecutionKind {
+  return typeof value === "string" && (SU_SESSION_EXECUTION_KINDS as readonly string[]).includes(value);
+}
+
+export type SuSessionExecutionSelectionInput = {
+  provider: SuSessionBackend;
+  /** Preserve presence: [] or an invalid value is a refusal, never omission. */
+  requestedKinds?: readonly unknown[];
+  supportedKinds?: readonly SuSessionExecutionKind[];
+} & (
+  | { operation: "create"; headless: boolean; defaultKind: SuSessionExecutionKind }
+  | { operation: "existing"; savedKind?: unknown; legacyKind: SuSessionExecutionKind }
+);
+
+export type SuSessionExecutionSelection =
+  | { ok: true; provider: SuSessionBackend; executionKind: SuSessionExecutionKind;
+      source: "explicit" | "headless-default" | "client-default" | "saved" | "legacy" }
+  | { ok: false; refusal: SuSessionRefusal };
+
+/** Ordered launch policy; reconnects never invoke the new-session default. */
+export function selectSuSessionExecution(input: SuSessionExecutionSelectionInput): SuSessionExecutionSelection {
+  const refuse = (code: string, message: string): SuSessionExecutionSelection =>
+    ({ ok: false, refusal: { code, message, retryable: false } });
+  let requested: SuSessionExecutionKind | undefined;
+  if (Object.prototype.hasOwnProperty.call(input, "requestedKinds")) {
+    if (!Array.isArray(input.requestedKinds) || input.requestedKinds.length === 0
+      || !Array.from(input.requestedKinds).every(isSuSessionExecutionKind)) {
+      return refuse("invalid_execution_kind", "An explicit execution choice must be pty or programmatic.");
+    }
+    const choices = new Set(input.requestedKinds);
+    if (choices.size !== 1) return refuse("conflicting_execution_kinds", "Conflicting execution choices require one explicit selection.");
+    requested = input.requestedKinds[0] as SuSessionExecutionKind;
+  }
+  let executionKind: SuSessionExecutionKind;
+  let source: Extract<SuSessionExecutionSelection, { ok: true }>["source"];
+  if (input.operation === "existing") {
+    const hasSaved = Object.prototype.hasOwnProperty.call(input, "savedKind");
+    const saved = hasSaved ? input.savedKind : input.legacyKind;
+    if (!isSuSessionExecutionKind(saved)) return refuse("invalid_saved_execution_kind", "The saved execution choice must be reconciled before reconnecting.");
+    if (requested && requested !== saved) return refuse("execution_handoff_required", "Changing an existing session's execution kind requires an explicit handoff.");
+    executionKind = saved;
+    source = hasSaved ? "saved" : "legacy";
+  } else if (requested) {
+    executionKind = requested;
+    source = "explicit";
+  } else if (input.headless && (input.provider === "claude" || input.provider === "codex")) {
+    executionKind = "programmatic";
+    source = "headless-default";
+  } else {
+    executionKind = input.defaultKind;
+    source = "client-default";
+  }
+  if (!isSuSessionExecutionKind(executionKind)
+    || !(input.supportedKinds ?? SU_SESSION_EXECUTION_KINDS).includes(executionKind)) {
+    return refuse("unsupported_execution_kind", "The selected execution kind is unavailable; no fallback was launched.");
+  }
+  return { ok: true, provider: input.provider, executionKind, source };
+}
+
 export const SU_SESSION_LIFECYCLE_STATES = [
   "starting",
   "ready",
@@ -25,7 +88,7 @@ export const SU_SESSION_LIFECYCLE_STATES = [
 export type SuSessionLifecycleState =
   (typeof SU_SESSION_LIFECYCLE_STATES)[number];
 
-export const SU_SESSION_COMMAND_TYPES = [
+export const SU_SESSION_LEGACY_COMMAND_TYPES = [
   "owner_turn",
   "interrupt",
   "resume",
@@ -33,7 +96,39 @@ export const SU_SESSION_COMMAND_TYPES = [
   "focus",
   "end",
 ] as const;
+export type SuSessionLegacyCommandType = (typeof SU_SESSION_LEGACY_COMMAND_TYPES)[number];
+export const SU_SESSION_EXTENDED_COMMAND_TYPES = ["queue", "steer", "handoff"] as const;
+export type SuSessionExtendedCommandType = (typeof SU_SESSION_EXTENDED_COMMAND_TYPES)[number];
+export const SU_SESSION_COMMAND_TYPES = [
+  ...SU_SESSION_LEGACY_COMMAND_TYPES, ...SU_SESSION_EXTENDED_COMMAND_TYPES,
+] as const;
 export type SuSessionCommandType = (typeof SU_SESSION_COMMAND_TYPES)[number];
+
+export const SU_SESSION_INPUT_PART_TYPES = ["text", "image", "file"] as const;
+export type SuSessionInputPartType = (typeof SU_SESSION_INPUT_PART_TYPES)[number];
+/** Transport-neutral attachments. A runtime must refuse a part it cannot deliver. */
+export type SuSessionInputPart =
+  | { type: "text"; text: string }
+  | { type: "image"; mediaType: string; data: string }
+  | { type: "file"; uri: string; mediaType: string; name?: string };
+
+export const SU_SESSION_MESSAGE_ORIGINS = ["owner", "coordination", "system", "runtime"] as const;
+export type SuSessionMessageOriginKind = (typeof SU_SESSION_MESSAGE_ORIGINS)[number];
+/** Provenance is retained as data; coordination input is never relabelled owner input. */
+export interface SuSessionMessageOrigin {
+  kind: SuSessionMessageOriginKind;
+  actorId?: string;
+  sourceId?: string;
+}
+
+export interface SuSessionTurnInput {
+  turnId: string;
+  /** Legacy text remains exact; rich parts supplement it, never replace it silently. */
+  content: string;
+  input?: readonly SuSessionInputPart[];
+  model?: string;
+  approvals?: SuApprovalsMode;
+}
 
 export const SU_SESSION_EVENT_TYPES = [
   "session",
@@ -137,9 +232,17 @@ export type SuSessionCapabilitySupport =
   | { state: "conditional"; implementation: "native" | "host"; reason: string }
   | { state: "unsupported"; reason: string };
 
+export const SU_SESSION_CAPABILITIES_VERSION = 2 as const;
 export interface SuSessionCapabilities {
-  commands: Readonly<Record<SuSessionCommandType, SuSessionCapabilitySupport>>;
+  /** Omission means the legacy capability shape; absent extensions are unsupported. */
+  version?: typeof SU_SESSION_CAPABILITIES_VERSION;
+  commands: Readonly<Record<SuSessionLegacyCommandType, SuSessionCapabilitySupport>
+    & Partial<Record<SuSessionExtendedCommandType, SuSessionCapabilitySupport>>>;
   features: Readonly<Record<SuSessionFeature, SuSessionCapabilitySupport>>;
+  input?: {
+    parts: readonly SuSessionInputPartType[];
+    origins: readonly SuSessionMessageOriginKind[];
+  };
 }
 
 /**
@@ -201,6 +304,8 @@ export type SuSessionDescriptor<B extends SuSessionBackend = SuSessionBackend> =
   B extends SuSessionBackend
     ? {
         identity: SuSessionIdentity<B>;
+        /** Omitted only by legacy snapshots; omission is never a creation default. */
+        executionKind?: SuSessionExecutionKind;
         lifecycle: SuSessionLifecycleState;
         /** Increments when a replacement runtime attaches to the same identity. */
         runtimeGeneration: number;
@@ -253,12 +358,14 @@ export interface SuSessionCommandBase<
   commandId: string;
   issuedAt: string;
   target: SuSessionIdentity<B>;
+  /** Omitted only by legacy owner clients. */
+  origin?: SuSessionMessageOrigin;
+  /** Optional optimistic fence; stale clients cannot command a replacement runtime. */
+  expectedRuntimeGeneration?: number;
 }
 
 export type SuSessionCommandFor<B extends SuSessionBackend> =
-  | (SuSessionCommandBase<B, "owner_turn"> & {
-      turnId: string;
-      content: string;
+  | (SuSessionCommandBase<B, "owner_turn"> & SuSessionTurnInput & {
       /**
        * The model this turn and later ones run on, as a `model[:effort]`
        * spec. Omitted keeps the current model. The engine applies it before
@@ -272,6 +379,15 @@ export type SuSessionCommandFor<B extends SuSessionBackend> =
        * refuses the turn.
        */
       approvals?: SuApprovalsMode;
+    })
+  /** Queue waits for the active turn; steer targets that exact active turn. */
+  | (SuSessionCommandBase<B, "queue"> & SuSessionTurnInput)
+  | (SuSessionCommandBase<B, "steer"> & SuSessionTurnInput & { activeTurnId: string })
+  | (SuSessionCommandBase<B, "handoff"> & {
+      provider: SuSessionBackend;
+      executionKind: SuSessionExecutionKind;
+      expectedRuntimeGeneration: number;
+      reason?: string;
     })
   | (SuSessionCommandBase<B, "interrupt"> & {
       reason?: string;
@@ -335,7 +451,7 @@ export type SuSessionCommandResultEvent<B extends SuSessionBackend> =
     );
 
 export type SuSessionTranscriptEvent<B extends SuSessionBackend> =
-  SuSessionEventBase<B, "transcript"> &
+  SuSessionEventBase<B, "transcript"> & { origin?: SuSessionMessageOrigin } &
     (
       | {
           phase: "started";

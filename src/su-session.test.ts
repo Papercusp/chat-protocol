@@ -154,6 +154,9 @@ const commandSamples = {
     commandId: "c6",
     reason: "owner ended session",
   },
+  queue: { ...commandBase, type: "queue", commandId: "c7", turnId: "t2", content: "Next." },
+  steer: { ...commandBase, type: "steer", commandId: "c8", turnId: "s1", activeTurnId: "t1", content: "Adjust." },
+  handoff: { ...commandBase, type: "handoff", commandId: "c9", provider: "codex", executionKind: "programmatic", expectedRuntimeGeneration: 1 },
 } satisfies {
   [K in SuSessionCommandType]: Extract<SuSessionCommand<"claude">, { type: K }>;
 };
@@ -328,6 +331,9 @@ function commandKind(command: SuSessionCommand): SuSessionCommandType {
     case "fork":
     case "focus":
     case "end":
+    case "queue":
+    case "steer":
+    case "handoff":
       return command.type;
     default:
       return assertNeverSuSession(command);
