@@ -143,10 +143,9 @@ export const SU_SESSION_EVENT_TYPES = [
 export type SuSessionEventType = (typeof SU_SESSION_EVENT_TYPES)[number];
 
 /**
- * Capability keys every backend must declare. Because `SuSessionCapabilities`
- * types `features` as a TOTAL record over this union, adding a key here is a
- * compile error in every adapter until it declares the key truthfully — which
- * is the mechanism that keeps the published table honest rather than optimistic.
+ * Feature keys every backend must declare. `features` is a total record over
+ * this union. Extended command keys are optional for legacy descriptor readers;
+ * an absent key is unsupported, and current adapters publish every command key.
  *
  * Semantics, so an engine attests to the same question the PUI asks:
  * - `tool-events`       tool calls/results surface as structured events.
