@@ -26,7 +26,7 @@ export type SuSessionExecutionSelectionInput = {
   supportedKinds?: readonly SuSessionExecutionKind[];
 } & (
   | { operation: "create"; headless: boolean; defaultKind: SuSessionExecutionKind }
-  | { operation: "existing"; savedKind?: unknown; legacyKind: SuSessionExecutionKind }
+  | { operation: "existing"; savedKind?: unknown; legacyKind?: unknown }
 );
 
 export type SuSessionExecutionSelection =
@@ -53,6 +53,9 @@ export function selectSuSessionExecution(input: SuSessionExecutionSelectionInput
   if (input.operation === "existing") {
     const hasSaved = Object.prototype.hasOwnProperty.call(input, "savedKind");
     const saved = hasSaved ? input.savedKind : input.legacyKind;
+    if (!hasSaved && !isSuSessionExecutionKind(saved)) {
+      return refuse("unknown_existing_execution_kind", "The existing runtime's execution kind must be established before reconnecting.");
+    }
     if (!isSuSessionExecutionKind(saved)) return refuse("invalid_saved_execution_kind", "The saved execution choice must be reconciled before reconnecting.");
     if (requested && requested !== saved) return refuse("execution_handoff_required", "Changing an existing session's execution kind requires an explicit handoff.");
     executionKind = saved;

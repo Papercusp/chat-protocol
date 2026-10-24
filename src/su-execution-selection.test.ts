@@ -49,4 +49,11 @@ describe('SU execution selection policy (P-002)', () => {
     expect(selectSuSessionExecution({ provider: 'omp', operation: 'create', headless: true, defaultKind: 'pty' }))
       .toEqual({ ok: true, provider: 'omp', executionKind: 'pty', source: 'client-default' });
   });
+
+  it.each([undefined, null, '', 'sdk'])('never infers a legacy execution kind from missing or invalid evidence %s', (legacyKind) => {
+    expect(selectSuSessionExecution({ provider: 'claude', operation: 'existing', legacyKind }))
+      .toMatchObject({ ok: false, refusal: { code: 'unknown_existing_execution_kind', retryable: false } });
+    expect(selectSuSessionExecution({ provider: 'codex', operation: 'existing', legacyKind, requestedKinds: ['programmatic'] }))
+      .toMatchObject({ ok: false, refusal: { code: 'unknown_existing_execution_kind' } });
+  });
 });
