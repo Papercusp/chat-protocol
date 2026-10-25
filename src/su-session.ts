@@ -109,6 +109,14 @@ export type SuSessionCommandType = (typeof SU_SESSION_COMMAND_TYPES)[number];
 
 export const SU_SESSION_INPUT_PART_TYPES = ["text", "image", "file"] as const;
 export type SuSessionInputPartType = (typeof SU_SESSION_INPUT_PART_TYPES)[number];
+/** Rich transport limits; native model incompatibilities remain visible. */
+export const SU_SESSION_INPUT_LIMITS = {
+  imageMediaTypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],
+  fileMediaTypes: ["text/plain", "text/markdown", "application/json"],
+  imageBytes: 5 * 1024 * 1024, textFileBytes: 1024 * 1024,
+  totalBytes: 10 * 1024 * 1024, maxImages: 5,
+  imageModelRequirement: "The selected native model must support image input; native model refusals remain visible.",
+} as const;
 /** Transport-neutral attachments. A runtime must refuse a part it cannot deliver. */
 export type SuSessionInputPart =
   | { type: "text"; text: string }
@@ -247,6 +255,7 @@ export interface SuSessionCapabilities {
   input?: {
     parts: readonly SuSessionInputPartType[];
     origins: readonly SuSessionMessageOriginKind[];
+    limits?: typeof SU_SESSION_INPUT_LIMITS;
   };
 }
 
