@@ -71,6 +71,8 @@ export interface CardPresentation {
   multiline?: boolean;
   /** Mask private answers; send them through card-response, never chat input. */
   sensitive?: boolean;
+  /** The response schema accepts an empty string or checkbox selection. */
+  allowEmpty?: boolean;
   /** Same-origin live-card link; provider authentication URLs stay private. */
   link?: string;
   /**
