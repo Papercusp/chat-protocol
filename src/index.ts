@@ -69,6 +69,10 @@ export interface CardPresentation {
   placeholder?: string;
   /** text only: render a multi-line input (papercusp wire field; optional). */
   multiline?: boolean;
+  /** Mask private answers; send them through card-response, never chat input. */
+  sensitive?: boolean;
+  /** Same-origin live-card link; provider authentication URLs stay private. */
+  link?: string;
   /**
    * Bounds. `number` for slider; ISO date `string` for the `date` kind
    * (papercusp uses string date bounds — widened for back-compat; consumers
