@@ -113,7 +113,10 @@ export type SuSessionInputPartType = (typeof SU_SESSION_INPUT_PART_TYPES)[number
 export type SuSessionInputPart =
   | { type: "text"; text: string }
   | { type: "image"; mediaType: string; data: string }
-  | { type: "file"; uri: string; mediaType: string; name?: string };
+  | { type: "file"; uri: string; mediaType: string; name?: string;
+      /** New file delivery requires a workspace-bound project: URI and digest.
+       * Optional on the wire so old clients receive a typed delivery refusal. */
+      workspaceId?: string; sha256?: string; expiresAt?: string };
 
 export const SU_SESSION_MESSAGE_ORIGINS = ["owner", "coordination", "system", "runtime"] as const;
 export type SuSessionMessageOriginKind = (typeof SU_SESSION_MESSAGE_ORIGINS)[number];
