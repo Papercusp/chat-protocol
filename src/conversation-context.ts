@@ -162,7 +162,10 @@ export function selectConversationContext(scope: ContextScope, history: readonly
     || typeof summary.text !== 'string' || !summary.text.trim() || !uniqueIds(summary.coveredIds)
     || summary.coveredIds.some(id => !history.some(m => m.id === id)))) return fail('invalid-summary');
   const covered = new Set(summary?.coveredIds ?? []);
-  const latestUser = history.findLastIndex(m => m.role === 'user');
+  // A reverse scan, not Array#findLastIndex (ES2023): consumers compile this source directly and
+  // operator-core's `lib` stops at ES2022, where findLastIndex does not typecheck (TS2551).
+  let latestUser = -1;
+  for (let i = history.length - 1; i >= 0; i--) if (history[i].role === 'user') { latestUser = i; break; }
   const mandatory = new Set<number>();
   const members = new Map<number, number[]>();
   for (const [i, m] of history.entries()) {
