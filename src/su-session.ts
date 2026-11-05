@@ -556,6 +556,8 @@ export type SuSessionEventFor<B extends SuSessionBackend> =
       code: string;
       message: string;
       recoverable: boolean;
+      /** Actionable condition for a new request after a recoverable refusal. */
+      liftsWhen?: string;
       commandId?: string;
       details?: SuSessionJsonValue;
     });
